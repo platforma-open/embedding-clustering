@@ -1,0 +1,13 @@
+node_modules/
+dist/
+block-pack/
+dev/
+work/
+log/
+*.tgz
+.test_auth.json
+test-dry-run.json
+.turbo
+vite.config.*.timestamp-*
+.DS_Store
+/.idea
