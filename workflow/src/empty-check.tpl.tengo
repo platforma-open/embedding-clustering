@@ -1,0 +1,36 @@
+self := import("@platforma-sdk/workflow-tengo:tpl")
+exec := import("@platforma-sdk/workflow-tengo:exec")
+assets:= import("@platforma-sdk/workflow-tengo:assets")
+
+emptyCheckSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:empty-check")
+
+
+self.validateInputs({
+	"__options__,closed": "",
+    seqTable: "any",
+    "fileName,?": "string"
+})
+
+self.defineOutputs("emptyResult")
+
+self.body(func(inputs) {
+    // Input filename: TSV in sequence mode (default), Parquet matrix in embedding mode. emptyCheck.py
+    // reads by extension, so the same emptiness check serves both.
+    fileName := is_undefined(inputs.fileName) ? "sequences.tsv" : inputs.fileName
+    // Run script to check if input table is empty
+	emptyCheck := exec.builder().
+			software(emptyCheckSw).
+			mem("16GiB").
+			cpu(1).
+			addFile(fileName, inputs.seqTable).
+			arg("--output-dir").arg(".").
+			arg("--input").arg(fileName).
+			arg("--input-separator").arg("\t").
+			saveFileContent("isFileEmpty.txt").
+			printErrStreamToStdout().
+			run()
+
+    return {
+        emptyResult: emptyCheck.getFileContent("isFileEmpty.txt")
+    }
+})
