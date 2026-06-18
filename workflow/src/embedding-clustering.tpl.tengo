@@ -1,0 +1,158 @@
+// Embedding-distance clustering. main.tpl.tengo renders this to do the actual work.
+self := import("@platforma-sdk/workflow-tengo:tpl")
+exec := import("@platforma-sdk/workflow-tengo:exec")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+
+math := import("math")
+
+embeddingClusteringSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:embedding-clustering")
+processResultsSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:process-results")
+createEmptyFilesSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:create-empty-files")
+
+self.validateInputs({
+	"__options__,closed": "",
+	emptyOrNot: "any",
+	cloneTable: "any",
+	embeddingMatrix: "any",
+	isSingleCell: "boolean",
+	sequencesRef: "any",
+	keyCol: "string",
+	dimCol: "string",
+	valueCol: "string",
+	"minClusterSize,?": "number",
+	"mem,?": "number",
+	"cpu,?": "number"
+})
+
+// clustersFile/clusteringLog carry the saved clusters file + the clustering log (the embedding step's
+// stdout, surfaced by the UI as "Clustering Log").
+self.defineOutputs("abundances", "clusterToSeq", "cloneToCluster", "abundancesPerCluster", "distanceToCentroid", "clusterRadius", "clusterToSeqTop", "clusterRadiusTop", "abundancesTop", "clustersFile", "clusteringLog", "isEmpty")
+
+self.body(func(inputs) {
+	clustersFile := {}
+	clusteringLog := {}
+
+	cloneTable := inputs.cloneTable
+	sequencesRef := inputs.sequencesRef
+	isSingleCell := inputs.isSingleCell
+	minClusterSize := is_undefined(inputs.minClusterSize) ? 2 : inputs.minClusterSize
+	// min_samples is the HDBSCAN density/noise knob -- fixed at 5 (empirically best), not user-exposed
+	minSamples := 5
+
+	baseMemGiB := 32
+	if !is_undefined(inputs.mem) {
+		baseMemGiB = inputs.mem
+	}
+
+	if string(inputs.emptyOrNot.getData()) == "empty" {
+		// Shared empty-input guard: emit empty files with proper headers.
+		numSequences := len(sequencesRef)
+		emptyFilesBuilder := exec.builder().
+			software(createEmptyFilesSw).
+			mem("1GiB").
+			cpu(1).
+			arg("--num-sequences").arg(string(numSequences))
+
+		if isSingleCell {
+			emptyFilesBuilder = emptyFilesBuilder.arg("--is-single-cell")
+		}
+
+		emptyFiles := emptyFilesBuilder.
+			saveFile("abundances.tsv").
+			saveFile("cluster-to-seq.tsv").
+			saveFile("clone-to-cluster.tsv").
+			saveFile("abundances-per-cluster.tsv").
+			saveFile("distance_to_centroid.tsv").
+			saveFile("cluster-radius.tsv").
+			saveFile("cluster-to-seq-top.tsv").
+			saveFile("cluster-radius-top.tsv").
+			saveFile("abundances-top.tsv").
+			run()
+
+		return {
+			abundances: emptyFiles.getFile("abundances.tsv"),
+			clusterToSeq: emptyFiles.getFile("cluster-to-seq.tsv"),
+			cloneToCluster: emptyFiles.getFile("clone-to-cluster.tsv"),
+			abundancesPerCluster: emptyFiles.getFile("abundances-per-cluster.tsv"),
+			distanceToCentroid: emptyFiles.getFile("distance_to_centroid.tsv"),
+			clusterRadius: emptyFiles.getFile("cluster-radius.tsv"),
+			clusterToSeqTop: emptyFiles.getFile("cluster-to-seq-top.tsv"),
+			clusterRadiusTop: emptyFiles.getFile("cluster-radius-top.tsv"),
+			abundancesTop: emptyFiles.getFile("abundances-top.tsv"),
+			clustersFile: clustersFile,
+			clusteringLog: clusteringLog,
+			isEmpty: true
+		}
+	} else {
+		mem := string(baseMemGiB) + "GiB"
+		cpu := 16
+		if !is_undefined(inputs.cpu) {
+			cpu = inputs.cpu
+		}
+
+		// Step 1: embedding-distance clustering. Vector-dedup -> centered PCA-95 (cap 500, full SVD) ->
+		// L2-normalize -> HDBSCAN(eom) -> medoid representative; HDBSCAN noise -> singleton clusters.
+		// Emits a headerless clusters.tsv (rep -> cluster), a headered dedup_mapping.tsv (rep -> members),
+		// and a headered centroid_distances.tsv (per-representative cosine distance to the medoid).
+		embClust := exec.builder().
+			software(embeddingClusteringSw).
+			mem(mem).
+			cpu(cpu).
+			printErrStreamToStdout().
+			addFile("embedding.parquet", inputs.embeddingMatrix).
+			arg("--matrix").arg("embedding.parquet").
+			arg("--key-col").arg(inputs.keyCol).
+			arg("--dim-col").arg(inputs.dimCol).
+			arg("--value-col").arg(inputs.valueCol).
+			arg("--min-cluster-size").arg(string(minClusterSize)).
+			arg("--min-samples").arg(string(minSamples)).
+			saveFile("clusters.tsv").
+			saveFile("dedup_mapping.tsv").
+			saveFile("centroid_distances.tsv").
+			saveStdoutStream().
+			run()
+
+		clusters := embClust.getFile("clusters.tsv")
+		dedupMapping := embClust.getFile("dedup_mapping.tsv")
+		centroidDistances := embClust.getFile("centroid_distances.tsv")
+		clusteringLogStream := embClust.getStdoutStream()
+
+		// Step 2: aggregate. Expand reps -> members via dedup_mapping; --distances uses the precomputed
+		// cosine distances (no Levenshtein, no 1.0 cap).
+		result := exec.builder().
+			software(processResultsSw).
+			mem(string(int(math.max(32, baseMemGiB / 2))) + "GiB").
+			cpu(8).
+			addFile("clusters.tsv", clusters).
+			addFile("cloneTable.tsv", cloneTable).
+			addFile("dedup_mapping.tsv", dedupMapping).
+			addFile("centroid_distances.tsv", centroidDistances).
+			arg("--distances").arg("centroid_distances.tsv").
+			saveFile("abundances.tsv").
+			saveFile("cluster-to-seq.tsv").
+			saveFile("clone-to-cluster.tsv").
+			saveFile("abundances-per-cluster.tsv").
+			saveFile("distance_to_centroid.tsv").
+			saveFile("cluster-radius.tsv").
+			saveFile("cluster-to-seq-top.tsv").
+			saveFile("cluster-radius-top.tsv").
+			saveFile("abundances-top.tsv").
+			run()
+
+		return {
+			abundances: result.getFile("abundances.tsv"),
+			clusterToSeq: result.getFile("cluster-to-seq.tsv"),
+			cloneToCluster: result.getFile("clone-to-cluster.tsv"),
+			abundancesPerCluster: result.getFile("abundances-per-cluster.tsv"),
+			distanceToCentroid: result.getFile("distance_to_centroid.tsv"),
+			clusterRadius: result.getFile("cluster-radius.tsv"),
+			clusterToSeqTop: result.getFile("cluster-to-seq-top.tsv"),
+			clusterRadiusTop: result.getFile("cluster-radius-top.tsv"),
+			abundancesTop: result.getFile("abundances-top.tsv"),
+			// Save the clusters file + the clustering log.
+			clustersFile: clusters,
+			clusteringLog: clusteringLogStream,
+			isEmpty: false
+		}
+	}
+})

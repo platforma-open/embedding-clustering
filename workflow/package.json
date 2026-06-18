@@ -1,0 +1,17 @@
+{
+  "name": "@platforma-open/milaboratories.embedding-clustering.workflow",
+  "version": "0.0.0",
+  "description": "Tengo-based template",
+  "scripts": {
+    "build": "shx rm -rf dist && pl-tengo check && pl-tengo build",
+    "format": "/usr/bin/env emacs --script ./format.el",
+    "do-pack": "shx rm -f *.tgz && pnpm pack && shx mv *.tgz package.tgz"
+  },
+  "dependencies": {
+    "@platforma-sdk/workflow-tengo": "catalog:",
+    "@platforma-open/milaboratories.embedding-clustering.software": "workspace:*"
+  },
+  "devDependencies": {
+    "@platforma-sdk/tengo-builder": "catalog:"
+  }
+}
