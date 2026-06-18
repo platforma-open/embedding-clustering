@@ -1,6 +1,6 @@
 {
   "name": "@platforma-open/milaboratories.embedding-clustering.software",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "scripts": {
     "build": "pl-pkg build",
     "prepublishOnly": "pl-pkg prepublish",
