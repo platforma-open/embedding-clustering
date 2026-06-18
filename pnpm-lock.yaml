@@ -31,8 +31,8 @@ catalogs:
       specifier: ^1.7.3
       version: 1.10.3
     '@platforma-sdk/block-tools':
-      specifier: 2.10.19
-      version: 2.10.19
+      specifier: 2.11.0
+      version: 2.11.0
     '@platforma-sdk/eslint-config':
       specifier: 1.2.0
       version: 1.2.0
@@ -46,8 +46,8 @@ catalogs:
       specifier: 4.0.8
       version: 4.0.8
     '@platforma-sdk/test':
-      specifier: 1.79.11
-      version: 1.79.11
+      specifier: 1.79.12
+      version: 1.79.12
     '@platforma-sdk/ui-vue':
       specifier: 1.79.11
       version: 1.79.11
@@ -82,7 +82,7 @@ importers:
         version: 2.31.0(@types/node@25.9.3)
       '@platforma-sdk/block-tools':
         specifier: 'catalog:'
-        version: 2.10.19(@types/node@25.9.3)
+        version: 2.11.0(@types/node@25.9.3)
       shx:
         specifier: 'catalog:'
         version: 0.4.0
@@ -107,7 +107,7 @@ importers:
     devDependencies:
       '@platforma-sdk/block-tools':
         specifier: 'catalog:'
-        version: 2.10.19(@types/node@25.9.3)
+        version: 2.11.0(@types/node@25.9.3)
 
   model:
     dependencies:
@@ -132,7 +132,7 @@ importers:
         version: 1.2.3
       '@platforma-sdk/block-tools':
         specifier: 'catalog:'
-        version: 2.10.19(@types/node@25.9.3)
+        version: 2.11.0(@types/node@25.9.3)
       '@platforma-sdk/eslint-config':
         specifier: 'catalog:'
         version: 1.2.0(@eslint/js@9.39.4)(@stylistic/eslint-plugin@2.13.0(eslint@9.39.4)(typescript@5.6.3))(eslint-plugin-n@17.24.0(eslint@9.39.4)(typescript@5.6.3))(eslint-plugin-vue@9.33.0(eslint@9.39.4))(eslint@9.39.4)(globals@15.15.0)(typescript-eslint@8.61.1(eslint@9.39.4)(typescript@5.6.3))(typescript@5.6.3)
@@ -172,7 +172,7 @@ importers:
         version: 1.2.0(@eslint/js@9.39.4)(@stylistic/eslint-plugin@2.13.0(eslint@9.39.4)(typescript@5.6.3))(eslint-plugin-n@17.24.0(eslint@9.39.4)(typescript@5.6.3))(eslint-plugin-vue@9.33.0(eslint@9.39.4))(eslint@9.39.4)(globals@15.15.0)(typescript-eslint@8.61.1(eslint@9.39.4)(typescript@5.6.3))(typescript@5.6.3)
       '@platforma-sdk/test':
         specifier: 'catalog:'
-        version: 1.79.11(@bytecodealliance/preview2-shim@0.17.9)(@types/node@25.9.3)(vite@8.0.16(@types/node@25.9.3)(yaml@2.9.0))
+        version: 1.79.12(@bytecodealliance/preview2-shim@0.17.9)(@types/node@25.9.3)(vite@8.0.16(@types/node@25.9.3)(yaml@2.9.0))
       eslint:
         specifier: 'catalog:'
         version: 9.39.4
@@ -1058,8 +1058,8 @@ packages:
   '@milaboratories/pl-http@1.2.4':
     resolution: {integrity: sha512-QKmhx+WEvJCV9dUy/SBdQk/ApaJ5ewBFgm/b+XPlS10SusAdqUUTGvK5+hq8YSuUMXlHb/dk++UtI5YlDuDl2Q==}
 
-  '@milaboratories/pl-middle-layer@1.64.29':
-    resolution: {integrity: sha512-ARMI/U8NGFHd3D/LafexbUIVoOuxybv5EH0CHpxnaiHFbfdaEEjHcmEffNmptFaW+TTFXdyo4awTxW0Nj6Re2w==}
+  '@milaboratories/pl-middle-layer@1.64.30':
+    resolution: {integrity: sha512-ZuppY/3H++vYTu+7OGJ4mexNfhEml6g6pb9qsOUow9WHgde1sa1YqWLCKSIVFAO8AeBDLpgFFxAG83EeeKA9tA==}
     engines: {node: '>=22.19.0'}
 
   '@milaboratories/pl-model-backend@1.4.7':
@@ -1480,8 +1480,8 @@ packages:
   '@platforma-open/milaboratories.software-small-binaries@2.1.1':
     resolution: {integrity: sha512-KN1PR7YgUUfx1dxh/TtcoWpSZbOXbRxXzQuJ505qHuXuE0spYwC7bXnvJsEYbEwRcPMa0foTrjBnPNORE4yr+Q==}
 
-  '@platforma-sdk/block-tools@2.10.19':
-    resolution: {integrity: sha512-Vf4hdgeHtrhMurLzxnMbTFGm6zU5pOKB2fanWA13tFvY/a8ltwDKkgH8r97GygfMB6ghehFbuqQ3mSZIxmYz4w==}
+  '@platforma-sdk/block-tools@2.11.0':
+    resolution: {integrity: sha512-zJAPVOsgB/XvnlmrhiJUAHDl+MBSolo87nLIQVc+r6oQDDrpySUX4ztuOv/W9i9tnhjoeVeLtbySifmhdAn+Rg==}
     hasBin: true
 
   '@platforma-sdk/blocks-deps-updater@2.2.0':
@@ -1512,8 +1512,8 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  '@platforma-sdk/test@1.79.11':
-    resolution: {integrity: sha512-WLu8s/ukQp2qGQfhI2lJ6hd/cLPfekJD1AE95wGnAUobHaLj3ALI0Tngi+2/pB5Fcx2f623ba67PyqMna6FM8w==}
+  '@platforma-sdk/test@1.79.12':
+    resolution: {integrity: sha512-ViHnAgFFFyc80erocCGo90msJxcAJzJgeEbo1X3eBS4/75WcHG24bipw6ylSzfnBrT4KzWXa+0gxqfef+00a+Q==}
 
   '@platforma-sdk/ui-vue@1.79.11':
     resolution: {integrity: sha512-i5rC0xfdKNRTDRNO53l9/Xte0gIJDBrKk59f3pHXrUBhxef5CnNd9tqdWAu7Dw+6SZT2cQmS3+QvfvdqzbkHFw==}
@@ -8151,7 +8151,7 @@ snapshots:
     dependencies:
       undici: 7.16.0
 
-  '@milaboratories/pl-middle-layer@1.64.29(@bytecodealliance/preview2-shim@0.17.9)(@types/node@25.9.3)':
+  '@milaboratories/pl-middle-layer@1.64.30(@bytecodealliance/preview2-shim@0.17.9)(@types/node@25.9.3)':
     dependencies:
       '@milaboratories/computable': 2.9.5
       '@milaboratories/helpers': 1.14.2
@@ -8170,7 +8170,7 @@ snapshots:
       '@milaboratories/pl-tree': 1.12.12
       '@milaboratories/resolve-helper': 1.1.3
       '@milaboratories/ts-helpers': 1.8.3
-      '@platforma-sdk/block-tools': 2.10.19(@types/node@25.9.3)
+      '@platforma-sdk/block-tools': 2.11.0(@types/node@25.9.3)
       '@platforma-sdk/model': 1.79.6
       '@platforma-sdk/workflow-tengo': 6.6.2
       canonicalize: 2.1.0
@@ -8738,7 +8738,7 @@ snapshots:
       '@platforma-open/milaboratories.software-small-binaries.mnz-client': 1.6.5
       '@platforma-open/milaboratories.software-small-binaries.table-converter': 1.3.5
 
-  '@platforma-sdk/block-tools@2.10.19(@types/node@25.9.3)':
+  '@platforma-sdk/block-tools@2.11.0(@types/node@25.9.3)':
     dependencies:
       '@aws-sdk/client-s3': 3.859.0
       '@inquirer/prompts': 7.10.1(@types/node@25.9.3)
@@ -8818,11 +8818,11 @@ snapshots:
       '@oclif/core': 4.11.7
       winston: 3.19.0
 
-  '@platforma-sdk/test@1.79.11(@bytecodealliance/preview2-shim@0.17.9)(@types/node@25.9.3)(vite@8.0.16(@types/node@25.9.3)(yaml@2.9.0))':
+  '@platforma-sdk/test@1.79.12(@bytecodealliance/preview2-shim@0.17.9)(@types/node@25.9.3)(vite@8.0.16(@types/node@25.9.3)(yaml@2.9.0))':
     dependencies:
       '@milaboratories/computable': 2.9.5
       '@milaboratories/pl-client': 3.11.4
-      '@milaboratories/pl-middle-layer': 1.64.29(@bytecodealliance/preview2-shim@0.17.9)(@types/node@25.9.3)
+      '@milaboratories/pl-middle-layer': 1.64.30(@bytecodealliance/preview2-shim@0.17.9)(@types/node@25.9.3)
       '@milaboratories/pl-tree': 1.12.12
       '@platforma-sdk/model': 1.79.6
       '@vitest/coverage-istanbul': 4.1.9(vitest@4.1.9)
