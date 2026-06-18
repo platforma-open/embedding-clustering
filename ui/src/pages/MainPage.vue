@@ -16,7 +16,7 @@ import {
   PlSlideModal,
   usePlDataTableSettingsV2,
 } from '@platforma-sdk/ui-vue';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useApp } from '../app';
 
 const app = useApp();
@@ -38,7 +38,7 @@ const selection = ref<PlSelectionModel>({
 });
 
 // Open MSA when we click in a row
-const onRowDoubleClicked = reactive((key?: PTableKey) => {
+const onRowDoubleClicked = (key?: PTableKey) => {
   // Using keys (that will contain cluster ID) we get included clonotypes
   if (key) {
     const clusterSpecs = app.model.outputs.clusterAbundanceSpec;
@@ -49,7 +49,7 @@ const onRowDoubleClicked = reactive((key?: PTableKey) => {
     };
   }
   multipleSequenceAlignmentOpen.value = true;
-});
+};
 
 function setInput(inputRef?: PlRef) {
   app.model.data.datasetRef = inputRef;

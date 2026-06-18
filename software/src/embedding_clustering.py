@@ -153,8 +153,9 @@ def run_clustering(X, keys, min_cluster_size=5, min_samples=5, pca_cap=500, exac
     for cid, mrow in medoids.items():
         members = np.where(labels == cid)[0]
         cluster_id[members] = rep_keys[mrow]
-        # cosine distance to the medoid in the normalized space (unit vectors -> 1 - dot)
-        distance[members] = 1.0 - (Xn[members] @ Xn[mrow])
+        # cosine distance to the medoid in the normalized space (unit vectors -> 1 - dot), clipped to
+        # [0, 2] since float error can push the dot product slightly past 1 -> a tiny negative distance.
+        distance[members] = np.clip(1.0 - (Xn[members] @ Xn[mrow]), 0.0, 2.0)
 
     n_clusters = len(medoids)
     noise_fraction = float((labels == -1).mean())
@@ -181,6 +182,11 @@ def load_matrix(path, key_col, dim_col, value_col):
     if df.height % n != 0:
         raise ValueError(f"ragged embedding matrix: {df.height} rows for {n} clonotypes "
                          f"(not a multiple) -- a clonotype is missing or has extra dimensions")
+    # `% n == 0` alone can't catch a ragged matrix where per-key dim counts differ but still sum to a
+    # multiple of n (e.g. 3 + 1 for n=2). Verify every clonotype has the same number of dimensions, or
+    # the reshape below would silently mix values across clonotypes.
+    if df.group_by(key_col).len().get_column("len").n_unique() != 1:
+        raise ValueError("ragged embedding matrix: clonotypes have differing dimension counts")
     D = df.height // n
     X = df.get_column(value_col).to_numpy().reshape(n, D).astype(np.float64)
     return X, np.asarray(keys, dtype=object)

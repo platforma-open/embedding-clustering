@@ -406,6 +406,9 @@ wf.body(func(args) {
 				domain: clusterDomain,
 				annotations: {
 					"pl7.app/min": "0",
+					// Display colour scale only -- the data is NOT capped (cosine distance ranges 0-2),
+					// but distanceToCentroid is within-cluster so it stays well under 1; max:1 keeps good
+					// colour resolution over the realistic 0-~0.5 range and rare >1 values just saturate.
 					"pl7.app/max": "1",
 					"pl7.app/rankingOrder": "decreasing",
 					"pl7.app/format": ".2f"
@@ -429,6 +432,7 @@ wf.body(func(args) {
 				annotations: {
 					"pl7.app/rankingOrder": "decreasing",
 					"pl7.app/min": "0",
+					// Display colour scale only
 					"pl7.app/max": "1",
 					"pl7.app/format": ".2f"
 				}
@@ -530,6 +534,7 @@ wf.body(func(args) {
 				annotations: {
 					"pl7.app/rankingOrder": "decreasing",
 					"pl7.app/min": "0",
+					// Display colour scale only
 					"pl7.app/max": "1",
 					"pl7.app/format": ".2f"
 				}
