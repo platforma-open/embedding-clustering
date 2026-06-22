@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { PredefinedGraphOption } from '@milaboratories/graph-maker';
-import { GraphMaker } from '@milaboratories/graph-maker';
-import { PlBlockPage } from '@platforma-sdk/ui-vue';
-import { useApp } from '../app';
-import type { PColumnIdAndSpec } from '@platforma-sdk/model';
-import { computed } from 'vue';
-import strings from '@milaboratories/strings';
+import type { PredefinedGraphOption } from "@milaboratories/graph-maker";
+import { GraphMaker } from "@milaboratories/graph-maker";
+import { PlBlockPage } from "@platforma-sdk/ui-vue";
+import { useApp } from "../app";
+import type { PColumnIdAndSpec } from "@platforma-sdk/model";
+import { computed } from "vue";
+import strings from "@milaboratories/strings";
 
 const app = useApp();
 
@@ -25,25 +25,21 @@ const app = useApp();
  */
 
 // if there is no output or abundance spec, return undefined
-const defaultOptions = computed((): PredefinedGraphOption<'histogram'>[] | undefined => {
-  if (!app.model.outputs.clustersPfPcols)
-    return undefined;
+const defaultOptions = computed((): PredefinedGraphOption<"histogram">[] | undefined => {
+  if (!app.model.outputs.clustersPfPcols) return undefined;
 
   const histPcols = app.model.outputs.clustersPfPcols;
   function getIndex(name: string, pcols: PColumnIdAndSpec[]): number {
-    return pcols.findIndex((p) => (p.spec.name === name
-    ));
+    return pcols.findIndex((p) => p.spec.name === name);
   }
-  const defaults: PredefinedGraphOption<'histogram'>[] = [
+  const defaults: PredefinedGraphOption<"histogram">[] = [
     {
-      inputName: 'value',
-      selectedSource: histPcols[getIndex('pl7.app/clustering/clusterSize',
-        histPcols)].spec,
+      inputName: "value",
+      selectedSource: histPcols[getIndex("pl7.app/clustering/clusterSize", histPcols)].spec,
     },
   ];
   return defaults;
 });
-
 </script>
 
 <template>

@@ -1,16 +1,17 @@
 {
   "name": "@platforma-open/milaboratories.embedding-clustering.test",
-  "private": true,
   "version": "0.0.0",
+  "private": true,
   "description": "Block tests",
+  "keywords": [],
+  "files": [],
   "type": "module",
   "scripts": {
-    "test": "vitest --passWithNoTests",
-    "lint": "eslint .",
-    "type-check": "ts-builder type-check --target block-test"
+    "test": "vitest run --passWithNoTests",
+    "type-check": "ts-builder type-check --target block-test",
+    "fmt": "ts-builder format",
+    "check": "ts-builder check --target block-test"
   },
-  "files": [],
-  "keywords": [],
   "dependencies": {
     "this-block": "workspace:@platforma-open/milaboratories.embedding-clustering@*"
   },
@@ -18,9 +19,10 @@
     "@milaboratories/ts-builder": "catalog:",
     "@milaboratories/ts-configs": "catalog:",
     "@platforma-sdk/test": "catalog:",
-    "@platforma-sdk/eslint-config": "catalog:",
     "eslint": "catalog:",
-    "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "typescript": "*"
   }
 }
