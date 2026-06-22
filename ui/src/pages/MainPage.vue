@@ -1,7 +1,14 @@
 <script setup lang="ts">
-import { PlMultiSequenceAlignment } from '@milaboratories/multi-sequence-alignment';
-import strings from '@milaboratories/strings';
-import type { AxisId, PColumnIdAndSpec, PlRef, PlSelectionModel, PTableKey, SUniversalPColumnId } from '@platforma-sdk/model';
+import { PlMultiSequenceAlignment } from "@milaboratories/multi-sequence-alignment";
+import strings from "@milaboratories/strings";
+import type {
+  AxisId,
+  PColumnIdAndSpec,
+  PlRef,
+  PlSelectionModel,
+  PTableKey,
+  SUniversalPColumnId,
+} from "@platforma-sdk/model";
 import {
   PlAccordionSection,
   PlAgDataTableV2,
@@ -15,22 +22,27 @@ import {
   PlSectionSeparator,
   PlSlideModal,
   usePlDataTableSettingsV2,
-} from '@platforma-sdk/ui-vue';
-import { computed, ref, watch } from 'vue';
-import { useApp } from '../app';
+} from "@platforma-sdk/ui-vue";
+import { computed, ref, watch } from "vue";
+import { useApp } from "../app";
 
 const app = useApp();
 
 const multipleSequenceAlignmentOpen = ref(false);
 const clusteringLogOpen = ref(false);
-const settingsOpen = ref(app.model.data.datasetRef === undefined || app.model.data.embeddingRef === undefined);
+const settingsOpen = ref(
+  app.model.data.datasetRef === undefined || app.model.data.embeddingRef === undefined,
+);
 
 // Watch for when the workflow starts running and close settings
-watch(() => app.model.outputs.isRunning, (isRunning) => {
-  if (isRunning) {
-    settingsOpen.value = false;
-  }
-});
+watch(
+  () => app.model.outputs.isRunning,
+  (isRunning) => {
+    if (isRunning) {
+      settingsOpen.value = false;
+    }
+  },
+);
 // With selection we will get the axis of cluster id
 const selection = ref<PlSelectionModel>({
   axesSpec: [],
@@ -91,24 +103,30 @@ function deriveSourceSeqRefs(embeddingRef: PlRef): SUniversalPColumnId[] {
       return undefined;
     }
   };
-  const norm = (f: string | undefined) => (f ?? '').replace(/InFrame$/i, '');
+  const norm = (f: string | undefined) => (f ?? "").replace(/InFrame$/i, "");
   // Source sequences are amino acid (ESM-2); guard explicitly so a stray nucleotide column never matches.
-  const isAa = (id: string) => domainOf(id)['pl7.app/alphabet'] === 'aminoacid';
+  const isAa = (id: string) => domainOf(id)["pl7.app/alphabet"] === "aminoacid";
   const seqFeature = (id: string) => {
     const d = domainOf(id);
-    return d['pl7.app/vdj/feature'] ?? d['pl7.app/feature'];
+    return d["pl7.app/vdj/feature"] ?? d["pl7.app/feature"];
   };
   // Fv = VH+VL VDJRegion concatenation -> both chains' VDJRegion source columns.
-  if (embFeature === 'Fv') {
-    return seqOpts.filter((o) => isAa(o.value) && norm(seqFeature(o.value)) === 'VDJRegion').map((o) => o.value);
+  if (embFeature === "Fv") {
+    return seqOpts
+      .filter((o) => isAa(o.value) && norm(seqFeature(o.value)) === "VDJRegion")
+      .map((o) => o.value);
   }
   // scFv = the single-construct sequence column.
-  if (embFeature === 'scFv') {
-    return seqOpts.filter((o) => isAa(o.value) && nameOf(o.value) === 'pl7.app/vdj/scFv-sequence').map((o) => o.value);
+  if (embFeature === "scFv") {
+    return seqOpts
+      .filter((o) => isAa(o.value) && nameOf(o.value) === "pl7.app/vdj/scFv-sequence")
+      .map((o) => o.value);
   }
   // CDR3 / VDJRegion / peptide: match on the InFrame-normalized feature.
   const target = norm(embFeature);
-  return seqOpts.filter((o) => isAa(o.value) && norm(seqFeature(o.value)) === target).map((o) => o.value);
+  return seqOpts
+    .filter((o) => isAa(o.value) && norm(seqFeature(o.value)) === target)
+    .map((o) => o.value);
 }
 
 // On embedding-column pick: store the ref and auto-derive the source sequence column(s) for the
@@ -122,14 +140,14 @@ function onEmbeddingRefChange(ref?: PlRef) {
 const clusterAxis = computed<AxisId>(() => {
   if (app.model.outputs.clusterAbundanceSpec?.axesSpec[1] === undefined) {
     return {
-      type: 'String',
-      name: 'pl7.app/clusterId',
+      type: "String",
+      name: "pl7.app/clusterId",
       domain: {},
     };
   } else {
     return {
-      type: 'String',
-      name: 'pl7.app/clusterId',
+      type: "String",
+      name: "pl7.app/clusterId",
       domain: app.model.outputs.clusterAbundanceSpec?.axesSpec[1].domain,
     };
   }
@@ -184,15 +202,17 @@ const clusterAxis = computed<AxisId>(() => {
         @update:model-value="onEmbeddingRefChange"
       >
         <template #tooltip>
-          Which embedding to cluster by. Clonotypes (or peptides) that lie close together in this learned vector space are grouped into a cluster.<br/><br/>
-          When several options are listed, they differ by <b>source region</b> (e.g. CDR3, VDJ region, Fv) or the <b>model</b> used to compute them.
+          Which embedding to cluster by. Clonotypes (or peptides) that lie close together in this
+          learned vector space are grouped into a cluster.<br /><br />
+          When several options are listed, they differ by <b>source region</b> (e.g. CDR3, VDJ
+          region, Fv) or the <b>model</b> used to compute them.
         </template>
       </PlDropdownRef>
 
       <PlAlert v-if="app.model.outputs.inputState" type="warn" style="margin-top: 1rem">
         {{
-          'Error: The input dataset you have selected is empty. \
-          Please choose a different dataset.'
+          "Error: The input dataset you have selected is empty. \
+          Please choose a different dataset."
         }}
       </PlAlert>
 
@@ -204,7 +224,8 @@ const clusterAxis = computed<AxisId>(() => {
           :step="1"
         >
           <template #tooltip>
-            HDBSCAN minimum cluster size — the smallest number of clonotypes (or peptides) that can form a cluster. Lower values produce more, smaller clusters. Default 2.
+            HDBSCAN minimum cluster size — the smallest number of clonotypes (or peptides) that can
+            form a cluster. Lower values produce more, smaller clusters. Default 2.
           </template>
         </PlNumberField>
 
@@ -216,9 +237,7 @@ const clusterAxis = computed<AxisId>(() => {
           :step="1"
           :maxValue="1012"
         >
-          <template #tooltip>
-            Sets the amount of memory to use for the clustering.
-          </template>
+          <template #tooltip> Sets the amount of memory to use for the clustering. </template>
         </PlNumberField>
 
         <PlNumberField
@@ -228,9 +247,7 @@ const clusterAxis = computed<AxisId>(() => {
           :step="1"
           :maxValue="128"
         >
-          <template #tooltip>
-            Sets the number of CPU cores to use for the clustering.
-          </template>
+          <template #tooltip> Sets the number of CPU cores to use for the clustering. </template>
         </PlNumberField>
       </PlAccordionSection>
     </PlSlideModal>

@@ -24,12 +24,11 @@ jobs:
     with:
       app-name: 'Block: Embedding Clustering'
       app-name-slug: 'block-embedding-clustering'
-
       node-version: '20.x'
       build-script-name: 'build'
       pnpm-recursive-build: false
 
-      test: false
+      test: true
       test-script-name: 'test'
       pnpm-recursive-tests: false
       team-id: 'ciplopen'
@@ -61,8 +60,8 @@ jobs:
           "QUAY_USERNAME": ${{ toJSON(secrets.QUAY_USERNAME) }},
           "QUAY_ROBOT_TOKEN": ${{ toJSON(secrets.QUAY_ROBOT_TOKEN) }} }
 
-      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_CHANNEL: ${{ secrets.SLACK_BLOCKS_CI_CHANNEL }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
       GH_ZEN_APP_ID: ${{ secrets.GH_ZEN_APP_ID }}
       GH_ZEN_APP_PRIVATE_KEY: ${{ secrets.GH_ZEN_APP_PRIVATE_KEY }}
