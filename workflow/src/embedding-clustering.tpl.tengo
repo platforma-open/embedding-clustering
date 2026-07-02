@@ -20,6 +20,7 @@ self.validateInputs({
 	dimCol: "string",
 	valueCol: "string",
 	"minClusterSize,?": "number",
+	"rescueNoise,?": "boolean",
 	"mem,?": "number",
 	"cpu,?": "number"
 })
@@ -36,8 +37,14 @@ self.body(func(inputs) {
 	sequencesRef := inputs.sequencesRef
 	isSingleCell := inputs.isSingleCell
 	minClusterSize := is_undefined(inputs.minClusterSize) ? 2 : inputs.minClusterSize
-	// min_samples is the HDBSCAN density/noise knob -- fixed at 5 (empirically best), not user-exposed
+	// min_samples is the HDBSCAN density/noise knob (not user-exposed). Base value 5, but capped to
+	// min_cluster_size, never larger.
 	minSamples := 5
+	if minClusterSize < minSamples {
+		minSamples = minClusterSize
+	}
+	// Optional noise re-clustering: re-cluster the HDBSCAN noise pile to rescue dense sub-groups.
+	rescueNoise := is_undefined(inputs.rescueNoise) ? true : inputs.rescueNoise
 
 	baseMemGiB := 32
 	if !is_undefined(inputs.mem) {
@@ -91,10 +98,11 @@ self.body(func(inputs) {
 		}
 
 		// Step 1: embedding-distance clustering. Vector-dedup -> centered PCA-95 (cap 500, full SVD) ->
-		// L2-normalize -> HDBSCAN(eom) -> medoid representative; HDBSCAN noise -> singleton clusters.
-		// Emits a headerless clusters.tsv (rep -> cluster), a headered dedup_mapping.tsv (rep -> members),
-		// and a headered centroid_distances.tsv (per-representative cosine distance to the medoid).
-		embClust := exec.builder().
+		// L2-normalize -> HDBSCAN(eom) -> recursive size split (+ optional noise rescue) -> medoid
+		// representative; leftover noise -> singleton clusters. Emits a headerless clusters.tsv
+		// (rep -> cluster), a headered dedup_mapping.tsv (rep -> members), and a headered
+		// centroid_distances.tsv (per-representative cosine distance to the medoid).
+		embClustBuilder := exec.builder().
 			software(embeddingClusteringSw).
 			mem(mem).
 			cpu(cpu).
@@ -105,7 +113,13 @@ self.body(func(inputs) {
 			arg("--dim-col").arg(inputs.dimCol).
 			arg("--value-col").arg(inputs.valueCol).
 			arg("--min-cluster-size").arg(string(minClusterSize)).
-			arg("--min-samples").arg(string(minSamples)).
+			arg("--min-samples").arg(string(minSamples))
+
+		if rescueNoise {
+			embClustBuilder = embClustBuilder.arg("--rescue-noise")
+		}
+
+		embClust := embClustBuilder.
 			saveFile("clusters.tsv").
 			saveFile("dedup_mapping.tsv").
 			saveFile("centroid_distances.tsv").

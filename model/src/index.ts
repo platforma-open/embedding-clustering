@@ -31,6 +31,9 @@ export type BlockData = {
   embeddingRef?: PlRef;
   // HDBSCAN minimum cluster size.
   minClusterSize: number;
+  // Re-cluster the HDBSCAN noise pile to rescue dense sub-groups (rescued clusters are then subject to
+  // the recursive size split). On by default; toggleable via a checkbox in Advanced Settings.
+  rescueNoise: boolean;
   mem?: number;
   cpu?: number;
   tableState: PlDataTableStateV2;
@@ -69,6 +72,7 @@ const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
   customBlockLabel: "",
   sequencesRef: [],
   minClusterSize: 2, // HDBSCAN; user-configurable, fixed small default, not scaled with N
+  rescueNoise: true,
   tableState: createPlDataTableStateV2(),
   graphStateBubble: {
     title: "Most abundant clusters",
@@ -116,6 +120,7 @@ export const platforma = BlockModelV3.create(dataModel)
       sequencesRef: data.sequencesRef,
       embeddingRef: data.embeddingRef,
       minClusterSize: data.minClusterSize,
+      rescueNoise: data.rescueNoise,
       mem: data.mem,
       cpu: data.cpu,
     };

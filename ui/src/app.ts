@@ -10,6 +10,8 @@ import HistogramPage from "./pages/HistogramPage.vue";
 
 export const sdkPlugin = defineAppV3(platforma, (app) => {
   app.model.data.customBlockLabel ??= "";
+  // Default-guard for projects saved before the noise-rescue toggle existed (ON by default).
+  app.model.data.rescueNoise ??= true;
 
   syncDefaultBlockLabel(app.model);
 

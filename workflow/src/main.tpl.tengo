@@ -155,7 +155,8 @@ wf.body(func(args) {
 		keyCol: embSpec.axesSpec[0].annotations["pl7.app/label"],
 		dimCol: embSpec.axesSpec[1].annotations["pl7.app/label"],
 		valueCol: embSpec.annotations["pl7.app/label"],
-		minClusterSize: args.minClusterSize
+		minClusterSize: args.minClusterSize,
+		rescueNoise: args.rescueNoise
 	}, {
 		metaInputs: {
 			mem: args.mem,

@@ -15,12 +15,14 @@ import {
   PlAlert,
   PlBlockPage,
   PlBtnGhost,
+  PlCheckbox,
   PlDropdownRef,
   PlLogView,
   PlMaskIcon24,
   PlNumberField,
   PlSectionSeparator,
   PlSlideModal,
+  PlTooltip,
   usePlDataTableSettingsV2,
 } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
@@ -224,10 +226,22 @@ const clusterAxis = computed<AxisId>(() => {
           :step="1"
         >
           <template #tooltip>
-            HDBSCAN minimum cluster size — the smallest number of clonotypes (or peptides) that can
-            form a cluster. Lower values produce more, smaller clusters. Default 2.
+            Minimum cluster size — the fewest clonotypes (or peptides) HDBSCAN needs to call a group
+            a cluster. Lower values produce more, smaller clusters. Default 2. Clonotypes that don't
+            fall into any group are each reported as their own cluster, so the results can include
+            clusters smaller than this value.
           </template>
         </PlNumberField>
+
+        <PlCheckbox v-model="app.model.data.rescueNoise">
+          Re-cluster noise
+          <PlTooltip class="info">
+            <template #tooltip>
+              After the main clustering, re-cluster the points left as noise to rescue any that form
+              their own dense groups. On by default.
+            </template>
+          </PlTooltip>
+        </PlCheckbox>
 
         <PlSectionSeparator>Resource Allocation</PlSectionSeparator>
         <PlNumberField
