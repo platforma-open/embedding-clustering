@@ -220,7 +220,7 @@ def run_clustering(X, keys, min_cluster_size=5, min_samples=5, pca_cap=500, exac
     split_cap = 50                # NOISE-rescued clusters are split down toward this size
     max_depth = 3
     n_clusters_initial = len(np.unique(labels[labels >= 0])) if (labels >= 0).any() else 0
-    main_sizes = np.array([(labels == c).sum() for c in np.unique(labels) if c != -1])
+    _, main_sizes = np.unique(labels[labels >= 0], return_counts=True)   # per-cluster sizes, noise (-1) excluded
     p99 = int(np.ceil(np.percentile(main_sizes, 99))) if main_sizes.size else 0
     main_split_threshold = max(split_floor, min(MAIN_RECLUSTER_RATIO * p99, M // 2)) if main_sizes.size else M // 2
     noise_split_threshold = min(p99, split_cap) if main_sizes.size else split_cap
