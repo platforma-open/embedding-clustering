@@ -25,6 +25,8 @@ import warnings
 warnings.simplefilter("ignore", category=FutureWarning)  # match block convention (calculate_dim_reduction.py)
 
 import argparse
+import resource
+import sys
 import time
 
 import numpy as np
@@ -35,6 +37,16 @@ from sklearn.metrics import pairwise_distances
 
 def log(*a):
     print(f"[{time.strftime('%H:%M:%S')}]", *a, flush=True)
+
+
+def _peak_rss_gib():
+    """Peak resident set size of this process, in GiB. ru_maxrss is in KB on Linux (where the block
+    software runs) and in bytes on macOS (local dev). Logged so the workflow's memory formula can be
+    calibrated against the real N x D footprint (matches the sequence-space UMAP block)."""
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        return peak / (1024 ** 3)   # bytes -> GiB
+    return peak / (1024 ** 2)       # KB -> GiB
 
 
 # --- Medoid helper (reproduces hdbscan.weighted_cluster_medoid exactly) ----------------
@@ -86,15 +98,15 @@ def centered_pca_95(X, cap=500):
     Uses svd_solver='full' (deterministic). Returns the reduced matrix and k."""
     ncomp = min(cap, X.shape[0] - 1, X.shape[1])
     if ncomp < 1:
-        return X.astype(np.float64), X.shape[1]
+        return X.astype(np.float32), X.shape[1]
     pca = PCA(n_components=ncomp, svd_solver="full").fit(X)
     cum = np.cumsum(pca.explained_variance_ratio_)
     k = min(int(np.searchsorted(cum, 0.95) + 1), ncomp)
-    return pca.transform(X)[:, :k], k
+    return pca.transform(X)[:, :k].astype(np.float32), k
 
 
 def l2_normalize(X, eps=1e-12):
-    return (X / (np.linalg.norm(X, axis=1, keepdims=True) + eps)).astype(np.float64)
+    return (X / (np.linalg.norm(X, axis=1, keepdims=True) + eps)).astype(np.float32)
 
 
 def vector_dedup(X, keys):
@@ -309,29 +321,58 @@ def run_clustering(X, keys, min_cluster_size=5, min_samples=5, pca_cap=500, exac
 
 # --- I/O ----------------------------------------------------------------------------------------
 
-def load_matrix(path, key_col, dim_col, value_col):
-    """Read the long-format embedding matrix (parquet) -> (X, keys).
-    Rows are clonotypes (sorted by key, canonical order); each row is the value vector in
-    ascending embeddingDim order. Sorting by [key, dim] groups each clonotype's D values contiguously
-    in numeric dim order (not the lexicographic column-name order a pivot would impose), so a single
-    reshape(N, D) recovers the matrix without materializing it through Python lists (fast at scale)."""
+def load_matrix(path, key_col, dim_col, value_col, dims=None):
+    """Read the long-format embedding matrix (parquet) -> (X float32, keys object array).
+
+    One row per (clonotype, embeddingDim). Built by SCATTER (the same strategy as the sequence-space
+    UMAP loader): factorize the clonotype key to an integer code, then place each value at X[code, dim].
+    This is order-independent (dim positions the column, code positions the row), so no full sort of the
+    N*D-row frame is needed -- that sort was the dominant memory cost at scale. Casting the key to
+    Categorical keeps only the unique keys + per-row codes instead of N*D expanded strings. Kept float32
+    (half the RAM of float64); the downstream PCA/L2-normalize/HDBSCAN all run in float32.
+
+    Keys come back in physical-code (first-appearance) order; row order does not matter downstream
+    (vector_dedup re-sorts by key to pick the min-key representative; the output is keyed by clonotype
+    value, not row position).
+
+    `dims`: the embedding vector length D, taken from the input column's `pl7.app/embedding/length`
+    spec annotation when the workflow can supply it -- lets us size/validate without inferring D from the
+    data. When None, D is inferred as max(embeddingDim)+1. embeddingDim is the producer's 0..D-1 index.
+
+    Completeness (ragged-matrix guard, matches the prior loader's intent): a full, duplicate-free fill
+    requires BOTH len(vals) == n*D (no extra/duplicate rows) AND no unfilled cell after the scatter
+    (no missing dim)."""
     import polars as pl
-    df = pl.read_parquet(path).select([key_col, dim_col, value_col]).sort([key_col, dim_col])
+    df = pl.read_parquet(path, columns=[key_col, dim_col, value_col])
     if df.height == 0:
-        return np.empty((0, 0), dtype=np.float64), np.array([], dtype=object)
-    keys = df.get_column(key_col).unique(maintain_order=True).to_list()   # ascending, first-occurrence
-    n = len(keys)
-    if df.height % n != 0:
-        raise ValueError(f"ragged embedding matrix: {df.height} rows for {n} clonotypes "
-                         f"(not a multiple) -- a clonotype is missing or has extra dimensions")
-    # `% n == 0` alone can't catch a ragged matrix where per-key dim counts differ but still sum to a
-    # multiple of n (e.g. 3 + 1 for n=2). Verify every clonotype has the same number of dimensions, or
-    # the reshape below would silently mix values across clonotypes.
-    if df.group_by(key_col).len().get_column("len").n_unique() != 1:
-        raise ValueError("ragged embedding matrix: clonotypes have differing dimension counts")
-    D = df.height // n
-    X = df.get_column(value_col).to_numpy().reshape(n, D).astype(np.float64)
-    return X, np.asarray(keys, dtype=object)
+        return np.empty((0, 0), dtype=np.float32), np.array([], dtype=object)
+
+    cat = df.get_column(key_col).cast(pl.Categorical)
+    keys = cat.cat.get_categories()                 # unique clonotype keys, in physical-code order
+    n = keys.len()
+    codes = cat.to_physical().to_numpy()            # per-row clonotype index 0..n-1 (aligns with `keys`)
+    dim_idx = df.get_column(dim_col).to_numpy()      # per-row embeddingDim index
+    vals = df.get_column(value_col).cast(pl.Float32).to_numpy()
+    del df, cat
+
+    if dim_idx.min() < 0:
+        raise ValueError(f"embeddingDim must be a 0-based index; got a negative value {int(dim_idx.min())}.")
+    inferred_D = int(dim_idx.max()) + 1
+    D = int(dims) if dims else inferred_D
+    if inferred_D > D:
+        raise ValueError(f"embeddingDim index {inferred_D - 1} exceeds the declared vector length "
+                         f"--dims {D}; the spec annotation and the data disagree.")
+
+    if vals.shape[0] != n * D:
+        raise ValueError(f"ragged embedding matrix: {vals.shape[0]} rows != n*D ({n}*{D}) -- a "
+                         f"clonotype has missing, extra or duplicate (clonotype, dim) rows.")
+
+    X = np.full((n, D), np.nan, dtype=np.float32)
+    X[codes, dim_idx] = vals                         # scatter: row = clonotype, col = embeddingDim
+    if np.isnan(X).any():
+        raise ValueError("ragged embedding matrix: a (clonotype, dim) cell is missing -- a clonotype "
+                         "has a partial embedding-dimension set.")
+    return X, keys.to_numpy().astype(object)
 
 
 def main():
@@ -343,14 +384,18 @@ def main():
     ap.add_argument("--min-cluster-size", type=int, default=2)
     ap.add_argument("--min-samples", type=int, default=5)
     ap.add_argument("--pca-cap", type=int, default=500)
+    ap.add_argument("--dims", type=int, default=None,
+                    help="embedding vector length D, from the input column's pl7.app/embedding/length "
+                         "annotation; when omitted D is inferred as max(embeddingDim)+1")
     ap.add_argument("--rescue-noise", action="store_true",
                     help="re-cluster the HDBSCAN noise pile once to rescue dense sub-groups "
                          "(rescued clusters are then subject to the recursive size split)")
     args = ap.parse_args()
 
     log(f"loading matrix {args.matrix} ...")
-    X, keys = load_matrix(args.matrix, args.key_col, args.dim_col, args.value_col)
-    log(f"loaded {X.shape[0]} clonotypes x {X.shape[1]} dims")
+    X, keys = load_matrix(args.matrix, args.key_col, args.dim_col, args.value_col, dims=args.dims)
+    log(f"loaded {X.shape[0]} clonotypes x {X.shape[1]} dims "
+        f"(peak RSS after load {_peak_rss_gib():.2f} GiB)")
 
     res = run_clustering(X, keys, min_cluster_size=args.min_cluster_size,
                          min_samples=args.min_samples, pca_cap=args.pca_cap,
@@ -365,6 +410,8 @@ def main():
 
     write_outputs(res, keys)
     log("wrote clusters.tsv, dedup_mapping.tsv, centroid_distances.tsv")
+    log(f"peak RSS for clustering run: {_peak_rss_gib():.2f} GiB "
+        f"(N={s['N']}, unique={s['n_unique']}, D={X.shape[1]}, k_pca={s['k_pca']})")
 
 
 def write_outputs(res, keys):
