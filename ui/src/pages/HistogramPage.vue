@@ -43,7 +43,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"histogram">[] | undef
 </script>
 
 <template>
-  <PlBlockPage>
+  <PlBlockPage no-body-gutters>
     <GraphMaker
       v-model="app.model.data.graphStateHistogram"
       chartType="histogram"

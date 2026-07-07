@@ -52,7 +52,7 @@ const defaultOptions = computed((): PredefinedGraphOption<"bubble">[] | undefine
 </script>
 
 <template>
-  <PlBlockPage>
+  <PlBlockPage no-body-gutters>
     <GraphMaker
       v-model="app.model.data.graphStateBubble"
       chartType="bubble"

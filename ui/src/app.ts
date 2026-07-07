@@ -5,13 +5,16 @@ import {
 import { defineAppV3 } from "@platforma-sdk/ui-vue";
 import { watchEffect } from "vue";
 import BubblePlotPage from "./pages/BubblePlotPage.vue";
-import MainPage from "./pages/MainPage.vue";
 import HistogramPage from "./pages/HistogramPage.vue";
+import MainPage from "./pages/MainPage.vue";
 
 export const sdkPlugin = defineAppV3(platforma, (app) => {
   app.model.data.customBlockLabel ??= "";
+  // Default-guard for projects saved before the noise-rescue toggle existed (ON by default).
+  app.model.data.rescueNoise ??= true;
 
   syncDefaultBlockLabel(app.model);
+  reconcileEmbeddingSelection(app.model);
 
   return {
     progress: () => {
@@ -44,5 +47,24 @@ function syncDefaultBlockLabel(model: AppModel) {
       embeddingLabel,
       minClusterSize: model.data.minClusterSize,
     });
+  });
+}
+
+function reconcileEmbeddingSelection(model: AppModel) {
+  // Once the embedding options refresh, drop any embedding that is no longer among them so the
+  // dropdown's `required` gate blocks Run with a clear message instead of a bad resolve.
+  watchEffect(() => {
+    const ref = model.data.embeddingRef;
+    if (!ref) return;
+    const options = model.outputs.embeddingOptions;
+    // undefined = not computed yet (no dataset, or still loading) — don't clear on a transient miss.
+    if (options === undefined) return;
+    const stillValid = options.some(
+      (o) => o.ref.blockId === ref.blockId && o.ref.name === ref.name,
+    );
+    if (!stillValid) {
+      model.data.embeddingRef = undefined;
+      model.data.sequencesRef = [];
+    }
   });
 }

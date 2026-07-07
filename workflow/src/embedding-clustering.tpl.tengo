@@ -5,6 +5,9 @@ assets := import("@platforma-sdk/workflow-tengo:assets")
 
 math := import("math")
 
+// exec.formula builders — used to scale the clustering exec's RAM by the input parquet size.
+f := exec.formula
+
 embeddingClusteringSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:embedding-clustering")
 processResultsSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:process-results")
 createEmptyFilesSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:create-empty-files")
@@ -19,7 +22,9 @@ self.validateInputs({
 	keyCol: "string",
 	dimCol: "string",
 	valueCol: "string",
+	"dims,?": "string",
 	"minClusterSize,?": "number",
+	"rescueNoise,?": "boolean",
 	"mem,?": "number",
 	"cpu,?": "number"
 })
@@ -36,8 +41,14 @@ self.body(func(inputs) {
 	sequencesRef := inputs.sequencesRef
 	isSingleCell := inputs.isSingleCell
 	minClusterSize := is_undefined(inputs.minClusterSize) ? 2 : inputs.minClusterSize
-	// min_samples is the HDBSCAN density/noise knob -- fixed at 5 (empirically best), not user-exposed
+	// min_samples is the HDBSCAN density/noise knob (not user-exposed). Base value 5, but capped to
+	// min_cluster_size, never larger.
 	minSamples := 5
+	if minClusterSize < minSamples {
+		minSamples = minClusterSize
+	}
+	// Optional noise re-clustering: re-cluster the HDBSCAN noise pile to rescue dense sub-groups.
+	rescueNoise := is_undefined(inputs.rescueNoise) ? true : inputs.rescueNoise
 
 	baseMemGiB := 32
 	if !is_undefined(inputs.mem) {
@@ -84,28 +95,54 @@ self.body(func(inputs) {
 			isEmpty: true
 		}
 	} else {
-		mem := string(baseMemGiB) + "GiB"
 		cpu := 16
 		if !is_undefined(inputs.cpu) {
 			cpu = inputs.cpu
 		}
 
 		// Step 1: embedding-distance clustering. Vector-dedup -> centered PCA-95 (cap 500, full SVD) ->
-		// L2-normalize -> HDBSCAN(eom) -> medoid representative; HDBSCAN noise -> singleton clusters.
-		// Emits a headerless clusters.tsv (rep -> cluster), a headered dedup_mapping.tsv (rep -> members),
-		// and a headered centroid_distances.tsv (per-representative cosine distance to the medoid).
-		embClust := exec.builder().
+		// L2-normalize -> HDBSCAN(eom) -> recursive size split (+ optional noise rescue) -> medoid
+		// representative; leftover noise -> singleton clusters. Emits a headerless clusters.tsv
+		// (rep -> cluster), a headered dedup_mapping.tsv (rep -> members), and a headered
+		// centroid_distances.tsv (per-representative cosine distance to the medoid).
+		embClustBuilder := exec.builder().
 			software(embeddingClusteringSw).
-			mem(mem).
 			cpu(cpu).
 			printErrStreamToStdout().
-			addFile("embedding.parquet", inputs.embeddingMatrix).
+			addFile("embedding.parquet", inputs.embeddingMatrix, { tag: "input" }).
 			arg("--matrix").arg("embedding.parquet").
 			arg("--key-col").arg(inputs.keyCol).
 			arg("--dim-col").arg(inputs.dimCol).
 			arg("--value-col").arg(inputs.valueCol).
 			arg("--min-cluster-size").arg(string(minClusterSize)).
-			arg("--min-samples").arg(string(minSamples)).
+			arg("--min-samples").arg(string(minSamples))
+
+		// RAM: an explicit `mem` (Advanced Settings) is honored verbatim; otherwise scale the allocation
+		// with the input embedding-matrix size so a large matrix gets a large allocation automatically.
+		// The multiplier is a first estimate (full-SVD PCA + HDBSCAN over all points on the CPU path) --
+		// calibrate it against the "peak RSS" line the software logs. The static fallback covers backends
+		// that cannot evaluate formulas at plan time.
+		if !is_undefined(inputs.mem) {
+			embClustBuilder = embClustBuilder.mem(string(baseMemGiB) + "GiB")
+		} else {
+			memAst := f.clamp(
+				f.add(f.gib(8), f.mul(f.size("input"), 18)),
+				f.gib(16),
+				f.gib(128))
+			embClustBuilder = embClustBuilder.memFormula(memAst, { fallback: "64GiB" })
+		}
+
+		// Pass the embedding vector length D when the input column's spec annotation carries it, so the
+		// loader can size/validate the matrix without inferring D from the data.
+		if !is_undefined(inputs.dims) {
+			embClustBuilder = embClustBuilder.arg("--dims").arg(inputs.dims)
+		}
+
+		if rescueNoise {
+			embClustBuilder = embClustBuilder.arg("--rescue-noise")
+		}
+
+		embClust := embClustBuilder.
 			saveFile("clusters.tsv").
 			saveFile("dedup_mapping.tsv").
 			saveFile("centroid_distances.tsv").
