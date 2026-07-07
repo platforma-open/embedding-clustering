@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.0
+
+### Minor Changes
+
+- 7354d6b: Improve clustering algorithm
+
+### Patch Changes
+
+- Updated dependencies [7354d6b]
+  - @platforma-open/milaboratories.embedding-clustering.model@1.1.0
+
 ## 1.0.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@platforma-open/milaboratories.embedding-clustering.workflow",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Tengo-based template",
   "type": "module",
   "scripts": {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+### Minor Changes
+
+- 7354d6b: Improve clustering algorithm
+
 ## 1.0.1
 
 ### Patch Changes

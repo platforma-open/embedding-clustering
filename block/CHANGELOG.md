@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2
+
+### Patch Changes
+
+- Updated dependencies [7354d6b]
+  - @platforma-open/milaboratories.embedding-clustering.workflow@1.1.0
+  - @platforma-open/milaboratories.embedding-clustering.model@1.1.0
+  - @platforma-open/milaboratories.embedding-clustering.ui@1.1.0
+
 ## 1.0.1
 
 ### Patch Changes
