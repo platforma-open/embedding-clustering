@@ -561,7 +561,8 @@ wf.body(func(args) {
 	msaPf := pframes.pFrameBuilder()
 	i := 0
 	for pf in [cloneToClusterLinkPf, distancesPf] {
-		for k, v in pf {
+		for k in maps.getKeys(pf) {
+			v := pf[k]
 			msaPf.add(k + "_" + string(i), trace.inject(v.spec), v.data)
 			i = i + 1
 		}
@@ -571,7 +572,8 @@ wf.body(func(args) {
 	epf := pframes.pFrameBuilder()
 	i = 0
 	for pf in [abundancesPf, cloneToClusterPf, cloneToClusterLinkPf, clusterToSeqPf, abundancesPerClusterPf, distancesPf, clusterRadiusPf] {
-		for k, v in pf {
+		for k in maps.getKeys(pf) {
+			v := pf[k]
 			epf.add(k + "_" + string(i), trace.inject(v.spec), v.data) // label, specs, data
 			i = i + 1
 		}
