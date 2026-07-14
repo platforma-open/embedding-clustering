@@ -562,7 +562,7 @@ wf.body(func(args) {
 	i := 0
 	for pf in [cloneToClusterLinkPf, distancesPf] {
 		for k, v in pf {
-			msaPf.add(k + string(i), trace.inject(v.spec), v.data)
+			msaPf.add(k + "_" + string(i), trace.inject(v.spec), v.data)
 			i = i + 1
 		}
 	}
@@ -572,7 +572,7 @@ wf.body(func(args) {
 	i = 0
 	for pf in [abundancesPf, cloneToClusterPf, cloneToClusterLinkPf, clusterToSeqPf, abundancesPerClusterPf, distancesPf, clusterRadiusPf] {
 		for k, v in pf {
-			epf.add(k + string(i), trace.inject(v.spec), v.data) // label, specs, data
+			epf.add(k + "_" + string(i), trace.inject(v.spec), v.data) // label, specs, data
 			i = i + 1
 		}
 	}
