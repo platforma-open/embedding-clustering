@@ -15,7 +15,7 @@ catalog:
   '@platforma-sdk/ui-vue': 1.79.27
   '@platforma-sdk/tengo-builder': 4.0.15
   '@platforma-sdk/package-builder': 3.14.0
-  '@platforma-sdk/block-tools': 2.11.10
+  '@platforma-sdk/block-tools': 2.12.6
   '@platforma-sdk/test': 1.79.28
   '@milaboratories/helpers': 1.14.3
   '@milaboratories/strings': 0.1.2
