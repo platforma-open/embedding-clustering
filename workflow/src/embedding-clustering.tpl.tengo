@@ -100,14 +100,13 @@ self.body(func(inputs) {
 			cpu = inputs.cpu
 		}
 
-		// Step 1: embedding-distance clustering. Vector-dedup -> centered PCA-95 (cap 500, full SVD) ->
+		// Step 1: embedding-distance clustering. Streamed load + IncrementalPCA-95 (cap 500) ->
 		// L2-normalize -> HDBSCAN(eom) -> recursive size split (+ optional noise rescue) -> medoid
 		// representative; leftover noise -> singleton clusters. Emits a headerless clusters.tsv
-		// (rep -> cluster), a headered dedup_mapping.tsv (rep -> members), and a headered
+		// (rep -> cluster), a headered dedup_mapping.tsv (identity mapping; dedup dropped) and a headered
 		// centroid_distances.tsv (per-representative cosine distance to the medoid).
 		embClustBuilder := exec.builder().
 			software(embeddingClusteringSw).
-			cpu(cpu).
 			printErrStreamToStdout().
 			addFile("embedding.parquet", inputs.embeddingMatrix, { tag: "input" }).
 			arg("--matrix").arg("embedding.parquet").
@@ -117,19 +116,28 @@ self.body(func(inputs) {
 			arg("--min-cluster-size").arg(string(minClusterSize)).
 			arg("--min-samples").arg(string(minSamples))
 
-		// RAM: an explicit `mem` (Advanced Settings) is honored verbatim; otherwise scale the allocation
-		// with the input embedding-matrix size so a large matrix gets a large allocation automatically.
-		// The multiplier is a first estimate (full-SVD PCA + HDBSCAN over all points on the CPU path) --
-		// calibrate it against the "peak RSS" line the software logs. The static fallback covers backends
-		// that cannot evaluate formulas at plan time.
+		// Resources: an explicit `mem` (Advanced Settings) is honored verbatim; otherwise RAM scales
+		// with the input parquet size (f.size). Streaming + IncrementalPCA decouples RAM from input
+		// size (the full N x D matrix is never held), so peak RSS is bounded by the reduced N x k
+		// array + HDBSCAN + the refinement re-PCA budget (RAM_BUDGET_GIB=16 in the software;
+		// larger refined sets spill to a disk memmap instead of RAM). Observed ~5 GiB at 3.3M
+		// clonotypes; the 32 GiB floor covers heavy refinement, with a small slope for the HDBSCAN
+		// graph on very large N. staticFallback covers backends that cannot evaluate the formula at plan
+		// time. CPU is fixed and set inside onCPU (the 6.8.0 API requires cpu+ram together).
+		// NOTE: when the refined set exceeds the RAM budget the software memmaps its originals to the
+		// workdir, needing scratch DISK up to ~N x D x 4 bytes (e.g. ~41 GB at 10M x 1024).
 		if !is_undefined(inputs.mem) {
-			embClustBuilder = embClustBuilder.mem(string(baseMemGiB) + "GiB")
+			embClustBuilder = embClustBuilder.resources({
+				onCPU: { cpu: cpu, ram: string(baseMemGiB) + "GiB" }
+			})
 		} else {
-			memAst := f.clamp(
-				f.add(f.gib(8), f.mul(f.size("input"), 18)),
-				f.gib(16),
-				f.gib(128))
-			embClustBuilder = embClustBuilder.memFormula(memAst, { fallback: "64GiB" })
+			size := f.size("input")
+			embClustBuilder = embClustBuilder.resources({
+				onCPU: {
+					cpu: cpu,
+					ram: size.plus(f.gib(24)).between(f.gib(32), f.gib(64)).staticFallback(f.gib(48))
+				}
+			})
 		}
 
 		// Pass the embedding vector length D when the input column's spec annotation carries it, so the

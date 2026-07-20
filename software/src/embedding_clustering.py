@@ -1,38 +1,52 @@
 #!/usr/bin/env python3
 """Embedding-distance clustering for the embedding-clustering block.
 
-Reads one per-clonotype embedding matrix, de-duplicates identical vectors, reduces with centered PCA
-(95% variance, capped), L2-normalizes, clusters with sklearn HDBSCAN (eom), then refines the result on
-two independent paths: a MAIN cluster is re-clustered only if it is a huge size-outlier (a group the
-first pass failed to divide, now dwarfing every other cluster), and -- optionally, via --rescue-noise --
-the HDBSCAN noise pile is re-clustered to rescue dense sub-groups (which are then split down to the fine
-cluster scale). Re-clustering re-derives PCA on the subset only (EOM's "root-bias" / the global PCA
-collapse fine structure that a subset-local re-PCA re-exposes). It then picks each cluster's medoid
-representative, sends the remaining noise to singleton clusters, and writes the files
-process_results.py consumes:
+Streams one per-clonotype embedding matrix, reduces with centered PCA (95% variance, capped) fit
+INCREMENTALLY over the stream (IncrementalPCA -- so the full N x D matrix is never held: memory stays
+bounded by the reduced N x k array, not the raw embeddings), L2-normalizes, clusters with HDBSCAN
+(contrib hdbscan, dual-tree Boruvka MST, eom), then refines the result on two independent paths: a MAIN
+cluster is re-clustered only if it is a
+huge size-outlier (a group the first pass failed to divide, now dwarfing every other cluster), and --
+optionally, via --rescue-noise -- the HDBSCAN noise pile is re-clustered to rescue dense sub-groups
+(which are then split down to the fine cluster scale). Re-clustering re-derives PCA on the subset's
+ORIGINAL embedding vectors (EOM's "root-bias" / the global PCA collapse fine structure that a
+subset-local re-PCA re-exposes); those originals are held only for the points refinement can touch (the
+noise pile + huge-outlier members) -- in RAM when they fit RAM_BUDGET_GIB, else a disk memmap read in
+chunks. It then picks each cluster's medoid representative, sends the remaining noise to singleton
+clusters, and writes the files process_results.py consumes:
 
   clusters.tsv          headerless (clusterId, clonotypeKey) -- both representative keys,
                         clusterId = the cluster's medoid representative, one row per representative.
   dedup_mapping.tsv     headered  (representativeKey, clonotypeKey) -- one row per original clonotype;
-                        process_results.py joins it by column name to expand reps -> members.
+                        process_results.py joins it by column name to expand reps -> members. Identical
+                        vectors are NO LONGER de-duplicated, so this is an identity mapping.
   centroid_distances.tsv  headered (representativeKey, distance) -- cosine distance to the cluster
                         medoid in the reduced/normalized space; one row per representative,
                         noise singletons at distance 0 (so the downstream expansion join is complete).
 
-The exact path runs on scikit-learn + numpy only.
+The path runs on scikit-learn (PCA) + hdbscan + numpy (pyarrow/polars for the streaming read).
 """
 import warnings
 warnings.simplefilter("ignore", category=FutureWarning)  # match block convention (calculate_dim_reduction.py)
 
 import argparse
+import os
 import resource
 import sys
 import time
 
+import hdbscan
 import numpy as np
-from sklearn.cluster import HDBSCAN
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, IncrementalPCA
 from sklearn.metrics import pairwise_distances
+
+
+# Above this in-RAM full-SVD re-PCA footprint, refinement subsets are handled off-RAM (memmap + chunked
+# IncrementalPCA) instead of held in memory. full-SVD PCA peaks at ~4x the (m x D) float32 matrix
+# (input + centered copy + scipy's internal copy + the U output). 16 GiB reproduces "~300k vectors of the
+# largest (paired, D=2560) model in RAM"; the point cutoff scales with D (~1M at D=1024).
+RAM_BUDGET_GIB = 16.0
+_SVD_PEAK_FACTOR = 4
 
 
 def log(*a):
@@ -42,11 +56,21 @@ def log(*a):
 def _peak_rss_gib():
     """Peak resident set size of this process, in GiB. ru_maxrss is in KB on Linux (where the block
     software runs) and in bytes on macOS (local dev). Logged so the workflow's memory formula can be
-    calibrated against the real N x D footprint (matches the sequence-space UMAP block)."""
+    calibrated against the real footprint (matches the sequence-space UMAP block)."""
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin":
         return peak / (1024 ** 3)   # bytes -> GiB
     return peak / (1024 ** 2)       # KB -> GiB
+
+
+def _full_svd_fits(m, D):
+    """Whether an in-RAM full-SVD re-PCA of m vectors x D dims stays within RAM_BUDGET_GIB."""
+    return _SVD_PEAK_FACTOR * m * D * 4 <= RAM_BUDGET_GIB * (1024 ** 3)
+
+
+def _pick_k_95(explained_variance_ratio, cap):
+    """Number of components reaching 95% cumulative variance, capped."""
+    return min(int(np.searchsorted(np.cumsum(explained_variance_ratio), 0.95) + 1), cap)
 
 
 # --- Medoid helper (reproduces hdbscan.weighted_cluster_medoid exactly) ----------------
@@ -100,8 +124,7 @@ def centered_pca_95(X, cap=500):
     if ncomp < 1:
         return X.astype(np.float32), X.shape[1]
     pca = PCA(n_components=ncomp, svd_solver="full").fit(X)
-    cum = np.cumsum(pca.explained_variance_ratio_)
-    k = min(int(np.searchsorted(cum, 0.95) + 1), ncomp)
+    k = _pick_k_95(pca.explained_variance_ratio_, ncomp)
     return pca.transform(X)[:, :k].astype(np.float32), k
 
 
@@ -109,77 +132,257 @@ def l2_normalize(X, eps=1e-12):
     return (X / (np.linalg.norm(X, axis=1, keepdims=True) + eps)).astype(np.float32)
 
 
-def vector_dedup(X, keys):
-    """Collapse identical vectors (exact; bit-identical for same-model/same-sequence embeddings).
-    Returns (uniq, rep_keys, member_rep_keys): the unique-vector matrix, the representative key per
-    unique row (smallest clonotypeKey, deterministic), and the representative key for every input row."""
-    order = np.argsort(keys, kind="stable")              # lexicographic by key -> first occ = min key
-    Xs, ks = X[order], keys[order]
-    uniq, first, inv = np.unique(Xs, axis=0, return_index=True, return_inverse=True)
-    inv = inv.ravel()
-    rep_keys = ks[first]                                 # min key per unique vector
-    member_rep_keys = np.empty(len(keys), dtype=object)
-    member_rep_keys[order] = rep_keys[inv]               # representative for each original row
-    return uniq, rep_keys, member_rep_keys
+# --- Streaming loader + incremental global reduction -----------------------------------
+# The producer (xsv.exportFrame) writes each clonotype's D embedding-dimension rows in a contiguous
+# block, so the stream can assemble one clonotype at a time and never materialise the N*D long frame or
+# the full N x D dense matrix. Contiguity is validated per chunk (a clonotype must have exactly D rows).
+
+def _open_matrix(path, key_col, dim_col, value_col, dims):
+    """Validate the columns exist and resolve D (from --dims, else max(dim)+1 in the first row group)."""
+    import polars as pl
+    import pyarrow.parquet as pq
+    pf = pq.ParquetFile(path)
+    names = list(pf.schema_arrow.names)
+    for role, col in [("--key-col", key_col), ("--dim-col", dim_col), ("--value-col", value_col)]:
+        if col not in names:
+            raise ValueError(f"{role} {col!r} is not a column in {path}; available columns: {names}")
+    if pf.metadata.num_rows == 0:                 # empty input -> D is irrelevant (main writes empty outputs)
+        return pf, int(dims) if dims else 0
+    if dims:
+        return pf, int(dims)
+    D = int(pl.from_arrow(pf.read_row_group(0, columns=[dim_col])).get_column(dim_col).max()) + 1
+    return pf, D
 
 
-def _subcluster(sub_X, min_cluster_size, min_samples, pca_cap):
+def _stream_clonotypes(pf, key_col, dim_col, value_col, D, batch_rows=4_000_000):
+    """Yield (keys, matrix) for every clonotype, assembled from contiguous long-format rows (holding back
+    the trailing clonotype that may continue in the next batch). Memory bounded to ~one batch."""
+    import polars as pl
+
+    def build(ks, ds, vs):
+        # Assemble a dense (n_clonotypes x D) block from long rows: np.unique -> the distinct keys `uk`
+        # (sorted) plus `inv`, the per-row index into `uk`. Scattering mat[inv, ds] = vs then drops each
+        # value into its (clonotype, embeddingDim) cell, so row order within the chunk does not matter.
+        uk, inv = np.unique(ks, return_inverse=True)
+        # Row-count guard: each clonotype must have exactly D rows (a contiguous block).
+        if (np.bincount(inv) != D).any():
+            raise ValueError("a clonotype did not have exactly D contiguous rows -- the embedding matrix "
+                             "is not clonotype-blocked (the streaming loader needs contiguous rows).")
+        # Dimension-range guard: embeddingDim must be a 0..D-1 index. A negative value would wrap and
+        # silently corrupt a cell; a value >= D would raise a cryptic IndexError in the scatter below.
+        if ds.min() < 0 or ds.max() >= D:
+            raise ValueError(f"embeddingDim out of range [0, {D}); saw {int(ds.min())}..{int(ds.max())} "
+                             f"-- pass the correct --dims (the pl7.app/embedding/length annotation).")
+        # Completeness: NaN-fill, scatter, then require no cell left unset. This catches a clonotype with
+        # the right row COUNT but a duplicated dim (hence a missing dim -> an unfilled hole) and any NaN
+        # in the value column -- both would otherwise flow silently into PCA/HDBSCAN as garbage.
+        mat = np.full((uk.shape[0], D), np.nan, dtype=np.float32)
+        mat[inv, ds] = vs
+        if np.isnan(mat).any():
+            raise ValueError("ragged embedding matrix: a (clonotype, dim) cell is missing, duplicated, or "
+                             "NaN -- a clonotype has a partial/invalid embedding-dimension set.")
+        return uk, mat
+
+    leftover = None
+    for b in pf.iter_batches(columns=[key_col, dim_col, value_col], batch_size=batch_rows):
+        t = pl.from_arrow(b)
+        k = t.get_column(key_col).to_numpy().astype(object)
+        d = t.get_column(dim_col).to_numpy()
+        v = t.get_column(value_col).cast(pl.Float32).to_numpy()
+        # A clonotype's D rows can straddle a batch boundary, so prepend the previous batch's carried-over
+        # trailing clonotype before assembling this batch.
+        if leftover is not None:
+            k = np.concatenate([leftover[0], k])
+            d = np.concatenate([leftover[1], d])
+            v = np.concatenate([leftover[2], v])
+        # Hold back the LAST key's rows (they may continue in the next batch) as `leftover`; every other
+        # clonotype is fully contained in this batch and can be assembled + emitted now.
+        tail = k == k[-1]
+        leftover = (k[tail], d[tail], v[tail])
+        keep = ~tail
+        if keep.any():
+            yield build(k[keep], d[keep], v[keep])
+    # The final trailing clonotype has no continuation -- emit it.
+    if leftover is not None:
+        yield build(*leftover)
+
+
+def stream_reduce(pf, key_col, dim_col, value_col, D, pca_cap):
+    """Fit IncrementalPCA over the streamed clonotypes (pass 1) and transform them into the reduced
+    (N x k) array (pass 2). Returns (Xr float32, keys object, k). Never holds the full N x D matrix."""
+    # n_components must not exceed the number of samples IncrementalPCA is fitted on; a small input
+    # (fewer than pca_cap clonotypes) would otherwise never satisfy the batch-size requirement and leave
+    # the PCA unfitted. Cap by N -- taken for free from the parquet footer (D rows per clonotype), no scan.
+    n_total = max(1, pf.metadata.num_rows // D)
+    ncomp = min(pca_cap, D, max(1, n_total - 1))
+    ipca = IncrementalPCA(n_components=ncomp)
+    # Pass 1 -- fit the PCA over the whole stream. The fit must finish before anything can be transformed,
+    # so we consume the stream once here and re-stream for pass 2 (never holding all raw vectors at once).
+    # Buffer blocks so every partial_fit sees >= n_components rows (IncrementalPCA's requirement); a final
+    # remainder smaller than n_components is left out of the FIT only (never the pass-2 transform) --
+    # negligible for the PCA basis. `k` for 95% variance is then read from the fitted PCA.
+    buf, buf_n, n, fitted = [], 0, 0, False
+    for _, mat in _stream_clonotypes(pf, key_col, dim_col, value_col, D):
+        n += mat.shape[0]
+        buf.append(mat)
+        buf_n += mat.shape[0]
+        if buf_n >= ncomp:
+            ipca.partial_fit(buf[0] if len(buf) == 1 else np.concatenate(buf))
+            buf, buf_n, fitted = [], 0, True
+    if not fitted:
+        raise ValueError(f"cannot fit PCA: only {n} clonotype(s) available for n_components={ncomp}")
+    k = _pick_k_95(ipca.explained_variance_ratio_, ncomp)
+    log(f"global IncrementalPCA fit: {n} clonotypes, k={k} for 95% variance "
+        f"(peak RSS {_peak_rss_gib():.2f} GiB)")
+
+    # Pass 2 -- re-stream and transform each block into the preallocated reduced array, keeping `keys`
+    # aligned with the rows of `Xr` (block yield order == the order rows are written here).
+    Xr = np.empty((n, k), dtype=np.float32)
+    keys = np.empty(n, dtype=object)
+    pos = 0
+    for ks, mat in _stream_clonotypes(pf, key_col, dim_col, value_col, D):
+        r = ipca.transform(mat)[:, :k].astype(np.float32)
+        Xr[pos:pos + r.shape[0]] = r
+        keys[pos:pos + ks.shape[0]] = ks
+        pos += r.shape[0]
+    log(f"reduced to {Xr.shape[0]} x {k} = {Xr.nbytes / 1024**3:.2f} GiB (peak RSS {_peak_rss_gib():.2f} GiB)")
+    return Xr, keys, k
+
+
+# --- Refinement originals store + subset re-clustering --------------------------------
+# Refinement re-PCAs a subset's ORIGINAL embedding vectors. To keep those available without holding the
+# whole N x D matrix, a THIRD stream pass stores only the points refinement can touch (refined_mask):
+# in RAM when the full-SVD footprint fits RAM_BUDGET_GIB, else a disk memmap. `gpos` maps a global row
+# index to its position in that store.
+
+def build_refined_store(pf, key_col, dim_col, value_col, D, keys, refined_mask, workdir):
+    """Store the ORIGINAL D-dim vectors of the refined-set only (a 3rd stream pass). Returns
+    (store, gpos, mmpath): store is an in-RAM array or a disk memmap; gpos[global_row] = position in
+    store (-1 for non-refined rows); mmpath is the memmap file to clean up (or None)."""
+    import polars as pl
+    refined_idx = np.where(refined_mask)[0]
+    m = int(refined_idx.shape[0])
+    # gpos maps a GLOBAL clonotype row -> its compact position (0..m-1) in this store, or -1 if the
+    # clonotype is not in the refined set. Refinement fetches a subset's originals via store[gpos[idx]].
+    gpos = np.full(keys.shape[0], -1, dtype=np.int64)
+    gpos[refined_idx] = np.arange(m)
+
+    footprint = m * D * 4 / 1024**3
+    mmpath = None
+    if _full_svd_fits(m, D):
+        store = np.empty((m, D), dtype=np.float32)
+        log(f"refined-set {m} vectors x {D} = {footprint:.2f} GiB held in RAM (full-SVD re-PCA)")
+    else:
+        mmpath = os.path.join(workdir, "refined_originals.f32")
+        store = np.memmap(mmpath, dtype=np.float32, mode="w+", shape=(m, D))
+        log(f"refined-set {m} vectors x {D} = {footprint:.2f} GiB -> disk memmap {mmpath} "
+            f"(chunked IncrementalPCA re-PCA)")
+
+    # 3rd stream pass: write each refined clonotype's original vector to its store position. Match by KEY
+    # (robust to chunk ordering) via a per-chunk join to the refined key->position mapping.
+    mapping = pl.DataFrame({key_col: list(keys[refined_idx]), "_pos": gpos[refined_idx]})
+    for uk, mat in _stream_clonotypes(pf, key_col, dim_col, value_col, D):
+        j = pl.DataFrame({key_col: list(uk), "_row": np.arange(uk.shape[0], dtype=np.int64)}) \
+            .join(mapping, on=key_col, how="inner")
+        if j.height == 0:
+            continue
+        store[j.get_column("_pos").to_numpy()] = mat[j.get_column("_row").to_numpy()]
+    if mmpath is not None:
+        store.flush()
+    return store, gpos, mmpath
+
+
+def _reduce_subset(store, pos, D, pca_cap):
+    """Reduce a refinement subset's ORIGINAL vectors (at store positions `pos`) to 95%-variance PCA.
+    full-SVD when it fits RAM_BUDGET_GIB (exact, matches the historical re-PCA), else chunked
+    IncrementalPCA read from the memmap (memory-safe). Returns the reduced matrix in `pos` order."""
+    m = pos.shape[0]
+    # Small subset -> exact full-SVD PCA (materialise store[pos] in RAM), identical to the pre-streaming
+    # behaviour. Large subset (e.g. the whole noise pile) -> IncrementalPCA fit in chunks read straight
+    # from the (memmapped) store, so the m x D originals are never all resident at once.
+    if _full_svd_fits(m, D):
+        Xr, _ = centered_pca_95(np.asarray(store[pos]), cap=pca_cap)
+        return Xr
+    ncomp = min(pca_cap, m - 1, D)
+    ipca = IncrementalPCA(n_components=ncomp)
+    # Fit: visit positions in ascending store order so the memmap is read near-sequentially (fast disk
+    # I/O). The fit is order-independent, so reordering the rows for the fit is safe.
+    order = np.sort(pos)
+    chunk = 200_000
+    fitted = False
+    for i in range(0, m, chunk):
+        b = np.asarray(store[order[i:i + chunk]])
+        if b.shape[0] >= ncomp:                           # partial_fit needs >= n_components rows per chunk
+            ipca.partial_fit(b)
+            fitted = True
+    if not fitted:                                        # subset too small to fit PCA (unreachable on
+        return None                                       # this huge-subset path today) -> signal "skip":
+                                                          # the caller leaves the subset unsplit, as with
+                                                          # any subset that won't re-cluster.
+    k = _pick_k_95(ipca.explained_variance_ratio_, ncomp)
+    # Transform: emit rows in the ORIGINAL `pos` order (NOT sorted) so out[i] corresponds to the caller's
+    # idx[i] -- the sub-cluster labels must line up with the input subset indices.
+    out = np.empty((m, k), dtype=np.float32)
+    for i in range(0, m, chunk):
+        out[i:i + chunk] = ipca.transform(np.asarray(store[pos[i:i + chunk]]))[:, :k].astype(np.float32)
+    return out
+
+
+def _subcluster(store, gpos, idx, D, min_cluster_size, min_samples, pca_cap):
     """Re-PCA (95% var, on the subset's ORIGINAL embedding vectors) -> L2-normalize -> HDBSCAN(eom).
     Re-deriving PCA on just the subset re-expresses its LOCAL variance structure, which the global PCA
     collapses -- this is what lets a giant cluster (or the noise pile) resolve into real sub-clusters.
-    Returns (labels, probs) in subset-row order: labels 0..k-1 with -1 for noise, probs the membership
-    strengths. Same recipe/params as the main pass, so EOM and min_samples behaviour stay consistent."""
-    m = sub_X.shape[0]
+    `idx` are GLOBAL row indices; originals come from `store` via `gpos`. Returns (labels, probs) in
+    idx order: labels 0..k-1 with -1 for noise, probs the membership strengths. Same recipe/params as
+    the main pass, so EOM and min_samples behaviour stay consistent."""
+    m = idx.shape[0]
     labels = np.full(m, -1, dtype=np.int64)
     probs = np.zeros(m)
     if m < max(2, min_cluster_size):
         return labels, probs
-    Xr, _ = centered_pca_95(sub_X, cap=pca_cap)
+    Xr = _reduce_subset(store, gpos[idx], D, pca_cap)
+    if Xr is None:                              # subset too small to reduce -> leave it unsplit (no split)
+        return labels, probs
     Xn = l2_normalize(Xr)
     valid = np.linalg.norm(Xr, axis=1) > 1e-8   # drop degenerate (near-zero post-PCA) rows, as main pass
     if valid.sum() >= min_cluster_size:
-        clu = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
-                      metric="euclidean", algorithm="ball_tree",
-                      cluster_selection_method="eom", n_jobs=-1).fit(Xn[valid])
+        # contrib hdbscan: algorithm defaults to "best", which picks the dual-tree Boruvka MST for our
+        # low-dim (post-PCA) space -- ~4x faster than sklearn's HDBSCAN, which has no Boruvka path.
+        clu = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
+                              metric="euclidean", cluster_selection_method="eom",
+                              core_dist_n_jobs=-1).fit(Xn[valid])
         labels[valid] = clu.labels_
         probs[valid] = clu.probabilities_
     return labels, probs
 
 
-def run_clustering(X, keys, min_cluster_size=5, min_samples=5, pca_cap=500, exact_max=4000,
-                   rescue_noise=False):
-    """Pure core (numpy/sklearn only, importable for tests).
-    X: (N, D) raw per-clonotype embedding matrix. keys: (N,) clonotype keys (object/str).
-    rescue_noise: if True, re-cluster the main-pass noise pile once to rescue dense sub-groups
-    (the diffuse tail stays noise). OFF by default; surfaced as a UI toggle.
+def run_clustering(Xr, keys, D, k, pf, key_col, dim_col, value_col, workdir,
+                   min_cluster_size=2, min_samples=5, pca_cap=500, exact_max=4000, rescue_noise=False):
+    """Pure-ish core. Xr: (N, k) globally-reduced per-clonotype matrix. keys: (N,) clonotype keys.
+    pf + *_col + D let refinement re-read the ORIGINAL vectors it needs (see build_refined_store).
+    rescue_noise: if True, re-cluster the main-pass noise pile once to rescue dense sub-groups.
     Returns a dict:
-      rep_keys           (M,)   representative key per unique vector
-      cluster_id         (M,)   clusterId for each representative (medoid repkey, or self if noise)
-      member_rep_keys    (N,)   representative key for every input clonotype (for dedup_mapping)
-      distance           (M,)   cosine distance of each representative to its cluster medoid (0 for noise)
-      stats              dict   N, n_unique, k_pca, n_clusters, noise_fraction, n_degenerate,
-                                n_clusters_initial (main pass), main_split_threshold (a MAIN cluster
-                                bigger than this -- a huge outlier -- is re-clustered), noise_split_threshold
-                                (NOISE-rescued clusters are split down toward this), n_main_split,
-                                n_noise_split (clusters split on each path), n_clusters_from_noise
-                                (rescued from noise when rescue_noise=True)
+      rep_keys           (N,)   representative key per clonotype (== its own key; dedup dropped)
+      cluster_id         (N,)   clusterId for each representative (medoid repkey, or self if noise)
+      member_rep_keys    (N,)   representative key for every clonotype (identity mapping for dedup_mapping)
+      distance           (N,)   cosine distance of each representative to its cluster medoid (0 for noise)
+      stats              dict   as before (n_unique == N now).
     """
-    N = X.shape[0]
-    uniq, rep_keys, member_rep_keys = vector_dedup(X, keys)
-    M = uniq.shape[0]
+    N = Xr.shape[0]
+    M = N
+    rep_keys = keys
+    member_rep_keys = keys.copy()          # dedup dropped -> every clonotype represents itself
 
     if M < max(2, min_cluster_size):
-        # Too few unique vectors to form a cluster: every representative is its own singleton.
+        # Too few vectors to form a cluster: every clonotype is its own singleton.
         return dict(rep_keys=rep_keys, cluster_id=rep_keys.copy(), member_rep_keys=member_rep_keys,
-                    distance=np.zeros(M), stats=dict(N=N, n_unique=M, k_pca=0, n_clusters=0,
+                    distance=np.zeros(M), stats=dict(N=N, n_unique=M, k_pca=k, n_clusters=0,
                                                      noise_fraction=1.0, n_degenerate=0,
                                                      n_clusters_initial=0, main_split_threshold=0,
                                                      noise_split_threshold=0, n_main_split=0,
                                                      n_noise_split=0, n_clusters_from_noise=0))
 
-    log(f"de-duplicated {N} clonotypes -> {M} unique vectors")
-    log(f"step: reducing with centered PCA (95% variance, cap {pca_cap}) + L2-normalize ...")
-    Xr, k = centered_pca_95(uniq, cap=pca_cap)
+    log("step: L2-normalize + initial HDBSCAN on the global reduction ...")
     Xn = l2_normalize(Xr)
 
     # Degenerate (near-zero post-PCA norm) vectors cannot be normalized into a meaningful direction;
@@ -188,16 +391,18 @@ def run_clustering(X, keys, min_cluster_size=5, min_samples=5, pca_cap=500, exac
     valid = pre_norm > 1e-8
     n_degenerate = int((~valid).sum())
     if n_degenerate:
-        log(f"WARNING: {n_degenerate} representative vector(s) near-zero norm post-PCA -> excluded as singletons")
+        log(f"WARNING: {n_degenerate} vector(s) near-zero norm post-PCA -> excluded as singletons")
 
     labels = np.full(M, -1, dtype=np.int64)
     probs = np.zeros(M)
     if valid.sum() >= min_cluster_size:
         log(f"step: initial HDBSCAN (eom, min_cluster_size={min_cluster_size}, min_samples={min_samples}) "
             f"on {int(valid.sum())} vectors (PCA k={k}) ...")
-        clu = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
-                      metric="euclidean", algorithm="ball_tree",
-                      cluster_selection_method="eom", n_jobs=-1).fit(Xn[valid])
+        # contrib hdbscan: algorithm defaults to "best", which picks the dual-tree Boruvka MST for our
+        # low-dim (post-PCA) space -- ~4x faster than sklearn's HDBSCAN, which has no Boruvka path.
+        clu = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
+                              metric="euclidean", cluster_selection_method="eom",
+                              core_dist_n_jobs=-1).fit(Xn[valid])
         labels[valid] = clu.labels_
         probs[valid] = clu.probabilities_
 
@@ -230,12 +435,24 @@ def run_clustering(X, keys, min_cluster_size=5, min_samples=5, pca_cap=500, exac
         f"99th pct of main cluster sizes = {p99} -> noise-split threshold = {noise_split_threshold} "
         f"(min of that and cap {split_cap}); main-split threshold = {main_split_threshold}")
 
+    # The points refinement can ever touch: the noise pile (if rescue) + members of the oversized MAIN
+    # clusters (their split leftover folds into the noise pile, which is already covered). Store only
+    # those originals, then run refinement against that store.
+    oversized_main = [c for c in main_cluster_ids if (labels == c).sum() > main_split_threshold]
+    refined_mask = (labels == -1) if rescue_noise else np.zeros(M, dtype=bool)
+    for c in oversized_main:
+        refined_mask |= (labels == c)
+    store, gpos, mmpath = (None, None, None)
+    if refined_mask.any():
+        store, gpos, mmpath = build_refined_store(pf, key_col, dim_col, value_col, D, keys,
+                                                  refined_mask, workdir)
+
     def split_recursive(member_idx, depth, threshold):
         """Re-cluster member_idx (global rows) on a subset-local re-PCA. If it splits into >=2
         sub-clusters: relabel each with a fresh id (recursing into any child still > threshold, up to
         max_depth) and send leftover sub-noise to -1 (final singletons, not re-clustered). If it does
         NOT split (<2 sub-clusters) leave member_idx unchanged. Returns #sub-clusters (0 = no split)."""
-        sub_lab, sub_prob = _subcluster(uniq[member_idx], min_cluster_size, min_samples, pca_cap)
+        sub_lab, sub_prob = _subcluster(store, gpos, member_idx, D, min_cluster_size, min_samples, pca_cap)
         found = [s for s in np.unique(sub_lab) if s != -1]
         if len(found) < 2:
             return 0
@@ -251,50 +468,60 @@ def run_clustering(X, keys, min_cluster_size=5, min_samples=5, pca_cap=500, exac
             next_id[0] += 1
         return len(found)
 
-    # (1) MAIN path: re-cluster only the rare huge-outlier group(s). Iterate the initial-pass snapshot
-    #     so fresh sub-cluster ids (created by the recursion) are not re-processed. Runs BEFORE the noise
-    #     rescue, so any leftover it drops to -1 is folded into the noise pile and gets a rescue pass (2).
-    oversized_main = [c for c in main_cluster_ids if (labels == c).sum() > main_split_threshold]
+    # Both refinement paths use the originals store; a try/finally guarantees the memmap is freed even if
+    # re-clustering raises. Counters are initialised before the try so the stats below are always defined.
     n_main_split = 0
-    if oversized_main:
-        log(f"step: splitting oversized MAIN clusters -- {len(oversized_main)} exceed the huge-outlier "
-            f"threshold {main_split_threshold} ...")
-        for cid in oversized_main:
-            if split_recursive(np.where(labels == cid)[0], 0, main_split_threshold) > 0:
-                n_main_split += 1
-        log(f"  MAIN split -> {n_main_split} cluster(s) split")
-    else:
-        log(f"step: no MAIN cluster exceeds the huge-outlier threshold {main_split_threshold}; "
-            f"main clusters left as-is")
-
-    # (2) NOISE path (optional): rescue the noise pile once -- the main-pass noise plus any leftover the
-    #     MAIN split produced above -- then split the rescued clusters down to the fine scale.
     n_clusters_from_noise = 0
     n_noise_split = 0
-    if rescue_noise:
-        noise_idx = np.where(labels == -1)[0]
-        log(f"step: NOISE re-clustering ENABLED -- re-clustering {len(noise_idx)} noise points ...")
-        rescued_ids = []
-        if len(noise_idx) >= min_cluster_size:
-            sub_lab, sub_prob = _subcluster(uniq[noise_idx], min_cluster_size, min_samples, pca_cap)
-            for s in [v for v in np.unique(sub_lab) if v != -1]:
-                rows = noise_idx[sub_lab == s]
-                labels[rows] = next_id[0]
-                probs[rows] = sub_prob[sub_lab == s]
-                rescued_ids.append(next_id[0])
-                next_id[0] += 1
-                n_clusters_from_noise += 1
-        log(f"  NOISE re-clustering -> rescued {n_clusters_from_noise} cluster(s) from noise")
-        oversized_noise = [c for c in rescued_ids if (labels == c).sum() > noise_split_threshold]
-        if oversized_noise:
-            log(f"step: splitting NOISE-rescued clusters -- {len(oversized_noise)} exceed threshold "
-                f"{noise_split_threshold} ...")
-            for cid in oversized_noise:
-                if split_recursive(np.where(labels == cid)[0], 0, noise_split_threshold) > 0:
-                    n_noise_split += 1
-            log(f"  NOISE-rescued split -> {n_noise_split} cluster(s) split")
-    else:
-        log("step: NOISE re-clustering disabled")
+    try:
+        # (1) MAIN path: re-cluster only the rare huge-outlier group(s). Iterate the initial-pass snapshot
+        #     so fresh sub-cluster ids (created by the recursion) are not re-processed. Runs BEFORE the
+        #     noise rescue, so any leftover it drops to -1 is folded into the noise pile (rescue pass 2).
+        if oversized_main:
+            log(f"step: splitting oversized MAIN clusters -- {len(oversized_main)} exceed the huge-outlier "
+                f"threshold {main_split_threshold} ...")
+            for cid in oversized_main:
+                if split_recursive(np.where(labels == cid)[0], 0, main_split_threshold) > 0:
+                    n_main_split += 1
+            log(f"  MAIN split -> {n_main_split} cluster(s) split")
+        else:
+            log(f"step: no MAIN cluster exceeds the huge-outlier threshold {main_split_threshold}; "
+                f"main clusters left as-is")
+
+        # (2) NOISE path (optional): rescue the noise pile once -- the main-pass noise plus any leftover
+        #     the MAIN split produced above -- then split the rescued clusters down to the fine scale.
+        if rescue_noise:
+            noise_idx = np.where(labels == -1)[0]
+            log(f"step: NOISE re-clustering ENABLED -- re-clustering {len(noise_idx)} noise points ...")
+            rescued_ids = []
+            if len(noise_idx) >= min_cluster_size:
+                sub_lab, sub_prob = _subcluster(store, gpos, noise_idx, D, min_cluster_size, min_samples, pca_cap)
+                for s in [v for v in np.unique(sub_lab) if v != -1]:
+                    rows = noise_idx[sub_lab == s]
+                    labels[rows] = next_id[0]
+                    probs[rows] = sub_prob[sub_lab == s]
+                    rescued_ids.append(next_id[0])
+                    next_id[0] += 1
+                    n_clusters_from_noise += 1
+            log(f"  NOISE re-clustering -> rescued {n_clusters_from_noise} cluster(s) from noise")
+            oversized_noise = [c for c in rescued_ids if (labels == c).sum() > noise_split_threshold]
+            if oversized_noise:
+                log(f"step: splitting NOISE-rescued clusters -- {len(oversized_noise)} exceed threshold "
+                    f"{noise_split_threshold} ...")
+                for cid in oversized_noise:
+                    if split_recursive(np.where(labels == cid)[0], 0, noise_split_threshold) > 0:
+                        n_noise_split += 1
+                log(f"  NOISE-rescued split -> {n_noise_split} cluster(s) split")
+        else:
+            log("step: NOISE re-clustering disabled")
+    finally:
+        # Refinement done (or errored): free the originals store and delete the memmap so it never leaks.
+        if mmpath is not None:
+            del store
+            try:
+                os.remove(mmpath)
+            except OSError:
+                pass
 
     log("step: computing cluster medoids + centroid distances ...")
     medoids = cluster_medoids(Xn, labels, weights=probs, exact_max=exact_max)   # {cid: row index}
@@ -321,60 +548,6 @@ def run_clustering(X, keys, min_cluster_size=5, min_samples=5, pca_cap=500, exac
 
 # --- I/O ----------------------------------------------------------------------------------------
 
-def load_matrix(path, key_col, dim_col, value_col, dims=None):
-    """Read the long-format embedding matrix (parquet) -> (X float32, keys object array).
-
-    One row per (clonotype, embeddingDim). Built by SCATTER (the same strategy as the sequence-space
-    UMAP loader): factorize the clonotype key to an integer code, then place each value at X[code, dim].
-    This is order-independent (dim positions the column, code positions the row), so no full sort of the
-    N*D-row frame is needed -- that sort was the dominant memory cost at scale. Casting the key to
-    Categorical keeps only the unique keys + per-row codes instead of N*D expanded strings. Kept float32
-    (half the RAM of float64); the downstream PCA/L2-normalize/HDBSCAN all run in float32.
-
-    Keys come back in physical-code (first-appearance) order; row order does not matter downstream
-    (vector_dedup re-sorts by key to pick the min-key representative; the output is keyed by clonotype
-    value, not row position).
-
-    `dims`: the embedding vector length D, taken from the input column's `pl7.app/embedding/length`
-    spec annotation when the workflow can supply it -- lets us size/validate without inferring D from the
-    data. When None, D is inferred as max(embeddingDim)+1. embeddingDim is the producer's 0..D-1 index.
-
-    Completeness (ragged-matrix guard, matches the prior loader's intent): a full, duplicate-free fill
-    requires BOTH len(vals) == n*D (no extra/duplicate rows) AND no unfilled cell after the scatter
-    (no missing dim)."""
-    import polars as pl
-    df = pl.read_parquet(path, columns=[key_col, dim_col, value_col])
-    if df.height == 0:
-        return np.empty((0, 0), dtype=np.float32), np.array([], dtype=object)
-
-    cat = df.get_column(key_col).cast(pl.Categorical)
-    keys = cat.cat.get_categories()                 # unique clonotype keys, in physical-code order
-    n = keys.len()
-    codes = cat.to_physical().to_numpy()            # per-row clonotype index 0..n-1 (aligns with `keys`)
-    dim_idx = df.get_column(dim_col).to_numpy()      # per-row embeddingDim index
-    vals = df.get_column(value_col).cast(pl.Float32).to_numpy()
-    del df, cat
-
-    if dim_idx.min() < 0:
-        raise ValueError(f"embeddingDim must be a 0-based index; got a negative value {int(dim_idx.min())}.")
-    inferred_D = int(dim_idx.max()) + 1
-    D = int(dims) if dims else inferred_D
-    if inferred_D > D:
-        raise ValueError(f"embeddingDim index {inferred_D - 1} exceeds the declared vector length "
-                         f"--dims {D}; the spec annotation and the data disagree.")
-
-    if vals.shape[0] != n * D:
-        raise ValueError(f"ragged embedding matrix: {vals.shape[0]} rows != n*D ({n}*{D}) -- a "
-                         f"clonotype has missing, extra or duplicate (clonotype, dim) rows.")
-
-    X = np.full((n, D), np.nan, dtype=np.float32)
-    X[codes, dim_idx] = vals                         # scatter: row = clonotype, col = embeddingDim
-    if np.isnan(X).any():
-        raise ValueError("ragged embedding matrix: a (clonotype, dim) cell is missing -- a clonotype "
-                         "has a partial embedding-dimension set.")
-    return X, keys.to_numpy().astype(object)
-
-
 def main():
     ap = argparse.ArgumentParser(description="Embedding-distance clustering (HDBSCAN on ESM-2 vectors)")
     ap.add_argument("--matrix", default="embedding.parquet", help="long-format embedding matrix (parquet)")
@@ -392,16 +565,26 @@ def main():
                          "(rescued clusters are then subject to the recursive size split)")
     args = ap.parse_args()
 
-    log(f"loading matrix {args.matrix} ...")
-    X, keys = load_matrix(args.matrix, args.key_col, args.dim_col, args.value_col, dims=args.dims)
-    log(f"loaded {X.shape[0]} clonotypes x {X.shape[1]} dims "
-        f"(peak RSS after load {_peak_rss_gib():.2f} GiB)")
+    log(f"opening {args.matrix} ...")
+    pf, D = _open_matrix(args.matrix, args.key_col, args.dim_col, args.value_col, args.dims)
+    workdir = os.path.dirname(os.path.abspath(args.matrix))
 
-    res = run_clustering(X, keys, min_cluster_size=args.min_cluster_size,
-                         min_samples=args.min_samples, pca_cap=args.pca_cap,
-                         rescue_noise=args.rescue_noise)
+    if pf.metadata.num_rows == 0:                 # no clonotypes: write empty, well-formed outputs
+        log("empty embedding matrix -> writing empty outputs")
+        empty = np.array([], dtype=object)
+        write_outputs(dict(rep_keys=empty, cluster_id=empty, member_rep_keys=empty,
+                           distance=np.array([], dtype=float)), empty)
+        log("wrote clusters.tsv, dedup_mapping.tsv, centroid_distances.tsv")
+        return
+
+    log(f"streaming + IncrementalPCA reduction (D={D}) ...")
+    Xr, keys, k = stream_reduce(pf, args.key_col, args.dim_col, args.value_col, D, args.pca_cap)
+
+    res = run_clustering(Xr, keys, D, k, pf, args.key_col, args.dim_col, args.value_col, workdir,
+                         min_cluster_size=args.min_cluster_size, min_samples=args.min_samples,
+                         pca_cap=args.pca_cap, rescue_noise=args.rescue_noise)
     s = res["stats"]
-    log(f"unique vectors={s['n_unique']} (deduped from {s['N']}), PCA k={s['k_pca']}, "
+    log(f"clonotypes={s['N']}, PCA k={s['k_pca']}, "
         f"clusters={s['n_clusters']} (initial {s['n_clusters_initial']}, "
         f"+{s['n_clusters_from_noise']} rescued from noise [rescue={args.rescue_noise}]; "
         f"MAIN split {s['n_main_split']} at >{s['main_split_threshold']}, "
@@ -411,7 +594,7 @@ def main():
     write_outputs(res, keys)
     log("wrote clusters.tsv, dedup_mapping.tsv, centroid_distances.tsv")
     log(f"peak RSS for clustering run: {_peak_rss_gib():.2f} GiB "
-        f"(N={s['N']}, unique={s['n_unique']}, D={X.shape[1]}, k_pca={s['k_pca']})")
+        f"(N={s['N']}, D={D}, k_pca={s['k_pca']})")
 
 
 def write_outputs(res, keys):
@@ -423,7 +606,7 @@ def write_outputs(res, keys):
     pl.DataFrame({"clusterId": [str(c) for c in res["cluster_id"]], "clonotypeKey": rep}) \
         .write_csv("clusters.tsv", separator="\t", include_header=False)
     # dedup_mapping.tsv -- HEADERED (representativeKey, clonotypeKey), one row per original clonotype;
-    # process_results.py joins on these columns to expand rep -> members.
+    # process_results.py joins on these columns to expand rep -> members. Identity mapping (dedup dropped).
     pl.DataFrame({"representativeKey": [str(k) for k in res["member_rep_keys"]],
                   "clonotypeKey": [str(k) for k in keys]}) \
         .write_csv("dedup_mapping.tsv", separator="\t", include_header=True)
