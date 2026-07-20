@@ -107,7 +107,6 @@ self.body(func(inputs) {
 		// centroid_distances.tsv (per-representative cosine distance to the medoid).
 		embClustBuilder := exec.builder().
 			software(embeddingClusteringSw).
-			cpu(cpu).
 			printErrStreamToStdout().
 			addFile("embedding.parquet", inputs.embeddingMatrix, { tag: "input" }).
 			arg("--matrix").arg("embedding.parquet").
@@ -117,23 +116,28 @@ self.body(func(inputs) {
 			arg("--min-cluster-size").arg(string(minClusterSize)).
 			arg("--min-samples").arg(string(minSamples))
 
-		// RAM: an explicit `mem` (Advanced Settings) is honored verbatim; otherwise a mostly-flat
-		// allocation. Streaming + IncrementalPCA decouples RAM from the input size (the full N x D matrix
-		// is never held), so peak RSS is bounded by the reduced N x k array + HDBSCAN + the refinement
-		// re-PCA budget (RAM_BUDGET_GIB=16 in the software; larger refined sets spill to a disk memmap
-		// instead of RAM). Observed ~5 GiB at 3.3M clonotypes; ~32 GiB floor covers heavy refinement, with
-		// a small slope for the HDBSCAN graph on very large N. The static fallback covers backends that
-		// cannot evaluate formulas at plan time.
+		// Resources: an explicit `mem` (Advanced Settings) is honored verbatim; otherwise RAM scales
+		// with the input parquet size (f.size). Streaming + IncrementalPCA decouples RAM from input
+		// size (the full N x D matrix is never held), so peak RSS is bounded by the reduced N x k
+		// array + HDBSCAN + the refinement re-PCA budget (RAM_BUDGET_GIB=16 in the software;
+		// larger refined sets spill to a disk memmap instead of RAM). Observed ~5 GiB at 3.3M
+		// clonotypes; the 32 GiB floor covers heavy refinement, with a small slope for the HDBSCAN
+		// graph on very large N. staticFallback covers backends that cannot evaluate the formula at plan
+		// time. CPU is fixed and set inside onCPU (the 6.8.0 API requires cpu+ram together).
 		// NOTE: when the refined set exceeds the RAM budget the software memmaps its originals to the
 		// workdir, needing scratch DISK up to ~N x D x 4 bytes (e.g. ~41 GB at 10M x 1024).
 		if !is_undefined(inputs.mem) {
-			embClustBuilder = embClustBuilder.mem(string(baseMemGiB) + "GiB")
+			embClustBuilder = embClustBuilder.resources({
+				onCPU: { cpu: cpu, ram: string(baseMemGiB) + "GiB" }
+			})
 		} else {
-			memAst := f.clamp(
-				f.add(f.gib(24), f.size("input")),
-				f.gib(32),
-				f.gib(64))
-			embClustBuilder = embClustBuilder.memFormula(memAst, { fallback: "48GiB" })
+			size := f.size("input")
+			embClustBuilder = embClustBuilder.resources({
+				onCPU: {
+					cpu: cpu,
+					ram: size.plus(f.gib(24)).between(f.gib(32), f.gib(64)).staticFallback(f.gib(48))
+				}
+			})
 		}
 
 		// Pass the embedding vector length D when the input column's spec annotation carries it, so the
