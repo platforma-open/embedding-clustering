@@ -309,10 +309,16 @@ def _reduce_subset(store, pos, D, pca_cap):
     # I/O). The fit is order-independent, so reordering the rows for the fit is safe.
     order = np.sort(pos)
     chunk = 200_000
+    fitted = False
     for i in range(0, m, chunk):
         b = np.asarray(store[order[i:i + chunk]])
         if b.shape[0] >= ncomp:                           # partial_fit needs >= n_components rows per chunk
             ipca.partial_fit(b)
+            fitted = True
+    if not fitted:                                        # subset too small to fit PCA (unreachable on
+        return None                                       # this huge-subset path today) -> signal "skip":
+                                                          # the caller leaves the subset unsplit, as with
+                                                          # any subset that won't re-cluster.
     k = _pick_k_95(ipca.explained_variance_ratio_, ncomp)
     # Transform: emit rows in the ORIGINAL `pos` order (NOT sorted) so out[i] corresponds to the caller's
     # idx[i] -- the sub-cluster labels must line up with the input subset indices.
@@ -335,6 +341,8 @@ def _subcluster(store, gpos, idx, D, min_cluster_size, min_samples, pca_cap):
     if m < max(2, min_cluster_size):
         return labels, probs
     Xr = _reduce_subset(store, gpos[idx], D, pca_cap)
+    if Xr is None:                              # subset too small to reduce -> leave it unsplit (no split)
+        return labels, probs
     Xn = l2_normalize(Xr)
     valid = np.linalg.norm(Xr, axis=1) > 1e-8   # drop degenerate (near-zero post-PCA) rows, as main pass
     if valid.sum() >= min_cluster_size:

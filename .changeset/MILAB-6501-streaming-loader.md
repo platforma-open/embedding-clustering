@@ -1,7 +1,7 @@
 ---
-"@platforma-open/milaboratories.embedding-clustering": patch
-"@platforma-open/milaboratories.embedding-clustering.software": patch
-"@platforma-open/milaboratories.embedding-clustering.workflow": patch
+"@platforma-open/milaboratories.embedding-clustering": minor
+"@platforma-open/milaboratories.embedding-clustering.software": minor
+"@platforma-open/milaboratories.embedding-clustering.workflow": minor
 ---
 
 Constant-memory clustering for very large inputs (MILAB-6501). The embedding matrix is now streamed and
