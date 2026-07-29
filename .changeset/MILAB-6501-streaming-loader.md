@@ -19,3 +19,8 @@ Clustering now uses the contrib `hdbscan` package (via runenv-python-3 >= 1.11.3
 `sklearn.cluster.HDBSCAN`, for its dual-tree Boruvka MST — roughly 4x faster on the reduced (low-dim)
 space, which sklearn's HDBSCAN cannot do. Cluster assignments shift slightly versus the sklearn
 implementation (both are valid HDBSCAN*; they differ mainly on the small/noise-boundary points).
+
+The PCA dimensionality is now capped by input size: HDBSCAN cost grows with both N and the reduced
+dimensionality (and its KD-tree/Boruvka MST degrades above ~20-30 dims), so large inputs are reduced to
+fewer components — 500 (95% variance) up to 1M points, 100 up to 3M, 50 above 3M. Small inputs are
+unchanged; large inputs trade some retained variance for a tractable, far cheaper clustering step.
