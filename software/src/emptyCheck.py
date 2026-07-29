@@ -18,8 +18,8 @@ def main():
     # Open input file. Embedding mode passes a Parquet matrix (separator is irrelevant there); sequence
     # mode passes a TSV. Detect by extension so the same emptiness check serves both.
     if args.input.lower().endswith('.parquet'):
-        import polars as pl
-        is_empty = pl.read_parquet(args.input).height == 0
+        import pyarrow.parquet as pq
+        is_empty = pq.ParquetFile(args.input).metadata.num_rows == 0
     else:
         is_empty = pd.read_csv(args.input, sep=args.input_separator, dtype=str).empty
 

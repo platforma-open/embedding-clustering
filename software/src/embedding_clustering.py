@@ -73,6 +73,28 @@ def _pick_k_95(explained_variance_ratio, cap):
     return min(int(np.searchsorted(np.cumsum(explained_variance_ratio), 0.95) + 1), cap)
 
 
+# Size-tiered PCA-dimension cap. HDBSCAN cost grows with N *and* the reduced dimensionality, and its
+# KD-tree/Boruvka MST degrades badly above ~20-30 dims -- so the more points we cluster, the fewer PCA
+# components we keep. Small inputs keep the full 95%-variance reduction (the `ceiling`, default 500);
+# large inputs are capped lower. Deterministic in N -> reproducible across machines.
+_PCA_CAP_TIERS = [ # (N-above, cap); first match wins, else `ceiling`
+    (6_000_000, 20),
+    ( 5_000_000, 30),
+    ( 4_000_000, 40),
+    ( 3_000_000, 50),
+    ( 2_000_000, 70),
+    ( 1_000_000, 100),
+]   
+
+
+def _tiered_cap(n, ceiling):
+    """Effective PCA-component cap for n points, given the small-input ceiling."""
+    for threshold, cap in _PCA_CAP_TIERS:
+        if n > threshold:
+            return min(ceiling, cap)
+    return ceiling
+
+
 # --- Medoid helper (reproduces hdbscan.weighted_cluster_medoid exactly) ----------------
 # X must be L2-normalized so euclidean distance is the metric the clustering ran on. Returns the
 # GLOBAL row index of the representative (map it to the clonotype id). Validated 100% against contrib.
@@ -214,7 +236,7 @@ def stream_reduce(pf, key_col, dim_col, value_col, D, pca_cap):
     # (fewer than pca_cap clonotypes) would otherwise never satisfy the batch-size requirement and leave
     # the PCA unfitted. Cap by N -- taken for free from the parquet footer (D rows per clonotype), no scan.
     n_total = max(1, pf.metadata.num_rows // D)
-    ncomp = min(pca_cap, D, max(1, n_total - 1))
+    ncomp = min(_tiered_cap(n_total, pca_cap), D, max(1, n_total - 1))
     ipca = IncrementalPCA(n_components=ncomp)
     # Pass 1 -- fit the PCA over the whole stream. The fit must finish before anything can be transformed,
     # so we consume the stream once here and re-stream for pass 2 (never holding all raw vectors at once).
@@ -232,8 +254,9 @@ def stream_reduce(pf, key_col, dim_col, value_col, D, pca_cap):
     if not fitted:
         raise ValueError(f"cannot fit PCA: only {n} clonotype(s) available for n_components={ncomp}")
     k = _pick_k_95(ipca.explained_variance_ratio_, ncomp)
-    log(f"global IncrementalPCA fit: {n} clonotypes, k={k} for 95% variance "
-        f"(peak RSS {_peak_rss_gib():.2f} GiB)")
+    retained = float(ipca.explained_variance_ratio_[:k].sum())   # actual variance kept: < 95% when the cap binds
+    log(f"global IncrementalPCA fit: {n} clonotypes, k={k} retains {retained:.1%} variance "
+        f"(95% target, cap {ncomp}, peak RSS {_peak_rss_gib():.2f} GiB)")
 
     # Pass 2 -- re-stream and transform each block into the preallocated reduced array, keeping `keys`
     # aligned with the rows of `Xr` (block yield order == the order rows are written here).
@@ -297,13 +320,14 @@ def _reduce_subset(store, pos, D, pca_cap):
     full-SVD when it fits RAM_BUDGET_GIB (exact, matches the historical re-PCA), else chunked
     IncrementalPCA read from the memmap (memory-safe). Returns the reduced matrix in `pos` order."""
     m = pos.shape[0]
+    cap = _tiered_cap(m, pca_cap)   # a large refinement subset (e.g. the noise pile) is capped too
     # Small subset -> exact full-SVD PCA (materialise store[pos] in RAM), identical to the pre-streaming
     # behaviour. Large subset (e.g. the whole noise pile) -> IncrementalPCA fit in chunks read straight
     # from the (memmapped) store, so the m x D originals are never all resident at once.
     if _full_svd_fits(m, D):
-        Xr, _ = centered_pca_95(np.asarray(store[pos]), cap=pca_cap)
+        Xr, _ = centered_pca_95(np.asarray(store[pos]), cap=cap)
         return Xr
-    ncomp = min(pca_cap, m - 1, D)
+    ncomp = min(cap, m - 1, D)
     ipca = IncrementalPCA(n_components=ncomp)
     # Fit: visit positions in ascending store order so the memmap is read near-sequentially (fast disk
     # I/O). The fit is order-independent, so reordering the rows for the fit is safe.
