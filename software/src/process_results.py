@@ -29,14 +29,14 @@ cloneTable = cloneTable.with_columns(
     pl.col('clonotypeKeyLabel').str.replace(r'^[CP]-', 'CL-').alias('clusterLabel')
 )
 
-# clusterId, clonotypeKey (both are representative keys from the de-duplicated vectors).
-# Keys carry no prefix, so no stripping is needed here.
+# clusterId, clonotypeKey (both are representative keys). Keys carry no prefix, so no stripping here.
 clusters = pl.read_csv(clustersTsv, separator="\t", has_header=False,
                        new_columns=["clusterId", "clonotypeKey"])
 
-# --- Expand de-duplicated clusters back to all original clonotypeKeys ---
-# embedding_clustering.py de-duplicated identical vectors (one representative per group) before
-# clustering. Now expand each representative back to all original clonotypeKeys that share its vector.
+# --- Expand representatives back to all original clonotypeKeys ---
+# embedding_clustering.py no longer de-duplicates identical vectors (np.unique over the full matrix
+# cannot run at scale), so dedup_mapping is an IDENTITY mapping (each clonotype represents itself) and
+# this join is effectively 1:1 -- kept for contract compatibility with the representative/member schema.
 dedup_mapping = pl.read_csv(dedupMappingTsv, separator="\t")
 # dedup_mapping has columns: representativeKey, clonotypeKey
 
