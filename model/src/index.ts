@@ -17,7 +17,10 @@ import {
   createPlDataTableV2,
   isPColumnSpec,
 } from "@platforma-sdk/model";
+import { kind } from "@platforma-open/milaboratories.embedding-clustering.kind";
+
 export type * from "@milaboratories/helpers";
+export type * from "@platforma-open/milaboratories.embedding-clustering.kind";
 
 export type BlockData = {
   defaultBlockLabel: string;
@@ -64,15 +67,24 @@ function embeddingMatchesClonotypeAxis(
   return Object.keys(datasetDomain).every((k) => embDomain[k] === datasetDomain[k]);
 }
 
-const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
+const dataModel = new DataModelBuilder({ kind }).from<BlockData>("v1").init(({ params }) => ({
+  // Derived from the resolved cluster size, which is what the watchEffect in
+  // ui/src/app.ts derives it from too -- so the two agree from the start. The
+  // embedding label is the one part `init` cannot reach: it comes from the result
+  // pool, so a block created from a template carries the placeholder until the
+  // panel resolves the real one.
   defaultBlockLabel: getDefaultBlockLabel({
     embeddingLabel: "",
-    minClusterSize: 2,
+    minClusterSize: params?.minClusterSize ?? 2,
   }),
-  customBlockLabel: "",
-  sequencesRef: [],
-  minClusterSize: 2, // HDBSCAN; user-configurable, fixed small default, not scaled with N
-  rescueNoise: true,
+  customBlockLabel: params?.customBlockLabel ?? "",
+  datasetRef: params?.datasetRef,
+  embeddingRef: params?.embeddingRef,
+  sequencesRef: params?.sequencesRef ?? [],
+  minClusterSize: params?.minClusterSize ?? 2, // HDBSCAN; fixed small default, not scaled with N
+  rescueNoise: params?.rescueNoise ?? true,
+  mem: params?.mem,
+  cpu: params?.cpu,
   tableState: createPlDataTableStateV2(),
   graphStateBubble: {
     title: "Most abundant clusters",
@@ -102,7 +114,7 @@ const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
   },
 }));
 
-export const platforma = BlockModelV3.create(dataModel)
+export const platforma = BlockModelV3.create({ dataModel, kind })
 
   .args((data) => {
     if (!data.datasetRef) throw new Error("Dataset is required");
@@ -125,6 +137,23 @@ export const platforma = BlockModelV3.create(dataModel)
       cpu: data.cpu,
     };
   })
+
+  // Inverse of the kind's init-params contract: every field a user sets by hand,
+  // plus the derived `sequencesRef` -- the workflow reads it to decide whether to
+  // emit centroid and alignment columns, so dropping it would change the output
+  // shape of the block a template seeds. `defaultBlockLabel` is derived by a
+  // watchEffect from the embedding column's option label, so it is projected into
+  // args (the workflow reads it for the trace) but never templated.
+  .templateParams((data) => ({
+    datasetRef: data.datasetRef,
+    embeddingRef: data.embeddingRef,
+    sequencesRef: data.sequencesRef,
+    minClusterSize: data.minClusterSize,
+    rescueNoise: data.rescueNoise,
+    mem: data.mem,
+    cpu: data.cpu,
+    customBlockLabel: data.customBlockLabel,
+  }))
 
   .output("datasetOptions", (ctx) => {
     // Candidate inputs: the three clonotype/peptide anchor dataset shapes.
