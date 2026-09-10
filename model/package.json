@@ -1,6 +1,7 @@
 {
   "name": "@platforma-open/milaboratories.embedding-clustering.model",
   "version": "1.1.0",
+  "private": true,
   "description": "Block model",
   "type": "module",
   "main": "dist/index.cjs",
@@ -26,6 +27,7 @@
     "@milaboratories/graph-maker": "catalog:",
     "@milaboratories/helpers": "catalog:",
     "@milaboratories/strings": "catalog:",
+    "@platforma-open/milaboratories.embedding-clustering.kind": "workspace:*",
     "@platforma-sdk/model": "catalog:"
   },
   "devDependencies": {
