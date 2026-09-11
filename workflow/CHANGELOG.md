@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [fb3726b]
+  - @platforma-open/milaboratories.embedding-clustering.software@1.2.1
+
 ## 1.2.0
 
 ### Minor Changes

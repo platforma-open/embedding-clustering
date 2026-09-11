@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.1
+
+### Patch Changes
+
+- fb3726b: Add the block kind.
+
+  The block gains an init-params contract, so a project template can create it
+  with the dataset, the embedding column and the clustering settings already
+  chosen.
+
 ## 1.2.0
 
 ### Minor Changes
