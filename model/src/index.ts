@@ -1,53 +1,22 @@
-import type { GraphMakerState } from "@milaboratories/graph-maker";
 import strings from "@milaboratories/strings";
-import type {
-  PColumnIdAndSpec,
-  PColumnSpec,
-  PFrameHandle,
-  PlDataTableStateV2,
-  PlMultiSequenceAlignmentModel,
-  PlRef,
-  SUniversalPColumnId,
-} from "@platforma-sdk/model";
+import type { PColumnIdAndSpec, PColumnSpec, PFrameHandle } from "@platforma-sdk/model";
 import {
   BlockModelV3,
-  DataModelBuilder,
   createPFrameForGraphs,
-  createPlDataTableStateV2,
   createPlDataTableV2,
   isPColumnSpec,
 } from "@platforma-sdk/model";
+import { kind } from "@platforma-open/milaboratories.embedding-clustering.kind";
+import { blockDataModel } from "./dataModel";
+import { deriveTemplateParams } from "./templateParams";
+
 export type * from "@milaboratories/helpers";
+export type * from "@platforma-open/milaboratories.embedding-clustering.kind";
 
-export type BlockData = {
-  defaultBlockLabel: string;
-  customBlockLabel: string;
-  datasetRef?: PlRef;
-  // Auto-derived from the selected embedding column (source sequence column(s) for centroid/MSA
-  // display). The user never picks this directly in embedding clustering.
-  sequencesRef: SUniversalPColumnId[];
-  // The per-clonotype embedding column to cluster by. PlRef (not a canonical/anchored id) so the
-  // workflow can wire its producer in as an upstream via wf.resolve.
-  embeddingRef?: PlRef;
-  // HDBSCAN minimum cluster size.
-  minClusterSize: number;
-  // Re-cluster the HDBSCAN noise pile to rescue dense sub-groups (rescued clusters are then subject to
-  // the recursive size split). On by default; toggleable via a checkbox in Advanced Settings.
-  rescueNoise: boolean;
-  mem?: number;
-  cpu?: number;
-  tableState: PlDataTableStateV2;
-  graphStateBubble: GraphMakerState;
-  alignmentModel: PlMultiSequenceAlignmentModel;
-  graphStateHistogram: GraphMakerState;
-};
-
-// Single source of truth for the auto-subtitle (also the workflow trace label, main.tpl). The UI's
-// syncDefaultBlockLabel (app.ts) only resolves the human-readable embedding-column label from the
-// result pool (which a pure function can't do) and calls this; it owns no format logic.
-export function getDefaultBlockLabel(data: { embeddingLabel: string; minClusterSize: number }) {
-  return `${data.embeddingLabel || "Embedding"}, mcs:${data.minClusterSize}`;
-}
+export type { BlockData } from "./types";
+export { getDefaultBlockLabel } from "./types";
+export { blockDataModel, initBlockData } from "./dataModel";
+export { deriveTemplateParams } from "./templateParams";
 
 // True when an embedding column's clonotype axis (its axis 0) matches a dataset's clonotype axis
 // (axis 1): same axis name, and the dataset's domain is a subset of the embedding's. Used both to
@@ -64,45 +33,7 @@ function embeddingMatchesClonotypeAxis(
   return Object.keys(datasetDomain).every((k) => embDomain[k] === datasetDomain[k]);
 }
 
-const dataModel = new DataModelBuilder().from<BlockData>("v1").init(() => ({
-  defaultBlockLabel: getDefaultBlockLabel({
-    embeddingLabel: "",
-    minClusterSize: 2,
-  }),
-  customBlockLabel: "",
-  sequencesRef: [],
-  minClusterSize: 2, // HDBSCAN; user-configurable, fixed small default, not scaled with N
-  rescueNoise: true,
-  tableState: createPlDataTableStateV2(),
-  graphStateBubble: {
-    title: "Most abundant clusters",
-    template: "bubble",
-    currentTab: null,
-    layersSettings: {
-      bubble: {
-        normalizationDirection: null,
-      },
-    },
-  },
-  alignmentModel: {},
-  graphStateHistogram: {
-    title: strings.titles.histogram,
-    template: "bins",
-    currentTab: null,
-    layersSettings: {
-      bins: { fillColor: "#99e099" },
-    },
-    axesSettings: {
-      axisY: {
-        axisLabelsAngle: 90,
-        scale: "log",
-      },
-      other: { binsCount: 30 },
-    },
-  },
-}));
-
-export const platforma = BlockModelV3.create(dataModel)
+export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind })
 
   .args((data) => {
     if (!data.datasetRef) throw new Error("Dataset is required");
@@ -125,6 +56,10 @@ export const platforma = BlockModelV3.create(dataModel)
       cpu: data.cpu,
     };
   })
+
+  // Inverse of the kind's init-params contract. Named rather than inline so the round trip
+  // against `initBlockData` can be tested directly; see model/src/templateParams.ts.
+  .templateParams(deriveTemplateParams)
 
   .output("datasetOptions", (ctx) => {
     // Candidate inputs: the three clonotype/peptide anchor dataset shapes.
