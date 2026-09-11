@@ -178,9 +178,6 @@ importers:
       '@platforma-sdk/model':
         specifier: 'catalog:'
         version: 1.83.9
-      '@types/node':
-        specifier: '*'
-        version: 25.9.3
       typescript:
         specifier: '*'
         version: 5.9.3
@@ -194,9 +191,15 @@ importers:
       '@platforma-sdk/block-tools':
         specifier: 'catalog:'
         version: 2.15.0(@types/node@25.9.3)
+      '@types/node':
+        specifier: '*'
+        version: 25.9.3
       eslint:
         specifier: 'catalog:'
         version: 9.39.4
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.9(@types/node@25.9.3)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.16(@types/node@25.9.3)(yaml@2.9.0))
 
   software:
     devDependencies:
