@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+
+### Patch Changes
+
+- f79e5a8: Update SDK and MSA
+
 ## 1.2.0
 
 ### Minor Changes
