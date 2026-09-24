@@ -181,7 +181,7 @@ const clusterAxis = computed<AxisId>(() => {
       :settings="tableSettings"
       :not-ready-text="strings.callToActions.configureSettingsAndRun"
       :no-rows-text="strings.states.noDataAvailable"
-      :show-cell-button-for-axis-id="clusterAxis"
+      :show-cell-button-for-axis-id="app.model.outputs.isPeptide ? undefined : clusterAxis"
       @cell-button-clicked="onRowDoubleClicked"
     />
     <PlSlideModal v-model="settingsOpen" close-on-outside-click shadow>

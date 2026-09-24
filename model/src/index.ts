@@ -101,6 +101,20 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
   // Candidate source-sequence columns on the dataset. Not user-facing here; the UI uses this to
   // auto-derive the centroid/MSA sequence column(s) for the picked embedding (embeddings are
   // amino-acid based, so we only match aminoacid sequences).
+  .output("isPeptide", (ctx): boolean => {
+    const ref = ctx.data.datasetRef;
+    if (ref === undefined) return false;
+    const keyAxis = ctx.resultPool.getPColumnSpecByRef(ref)?.axesSpec[1];
+    if (keyAxis?.name !== "pl7.app/variantKey") return false;
+    const domain = keyAxis.domain ?? {};
+    const declared = domain["pl7.app/modality"];
+    if (declared === "vdj" || declared === "amplicon") return false;
+    if (domain["pl7.app/peptide/extractionRunId"] !== undefined) return true;
+    if (domain["pl7.app/repertoire/extractionRunId"] !== undefined) return false;
+    if (domain["pl7.app/vdj/clonotypingRunId"] !== undefined) return false;
+    return true;
+  })
+
   .output("sequenceOptions", (ctx) => {
     const ref = ctx.data.datasetRef;
     if (ref === undefined) return undefined;
