@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0
+
+### Minor Changes
+
+- 55b3558: Hide the multiple sequence alignment entry point for peptide datasets, including the table cell button.
+
+### Patch Changes
+
+- Updated dependencies [55b3558]
+  - @platforma-open/milaboratories.embedding-clustering.model@1.3.0
+
 ## 1.1.1
 
 ### Patch Changes

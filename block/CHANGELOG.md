@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0
+
+### Minor Changes
+
+- 55b3558: Hide the multiple sequence alignment entry point for peptide datasets, including the table cell button.
+
 ## 1.2.2
 
 ### Patch Changes

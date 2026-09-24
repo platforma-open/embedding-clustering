@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2
+
+### Patch Changes
+
+- 07ac4d3: Bump tengo-builder to 4.1.1 and block-tools to 2.16.1.
+
 ## 1.2.1
 
 ### Patch Changes
