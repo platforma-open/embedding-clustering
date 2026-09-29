@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.0
+
+### Minor Changes
+
+- 7693fad: Block Run and show an error when the selected embedding has more than 100,000 sequences; datasets that large are not supported yet.
+
+### Patch Changes
+
+- Updated dependencies [7693fad]
+  - @platforma-open/milaboratories.embedding-clustering.model@1.4.0
+
 ## 1.2.0
 
 ### Minor Changes
