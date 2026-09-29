@@ -1,20 +1,29 @@
 import strings from "@milaboratories/strings";
-import type { PColumnIdAndSpec, PColumnSpec, PFrameHandle } from "@platforma-sdk/model";
+import type {
+  PColumn,
+  PColumnIdAndSpec,
+  PColumnSpec,
+  PFrameHandle,
+  TreeNodeAccessor,
+} from "@platforma-sdk/model";
 import {
   BlockModelV3,
   createPFrameForGraphs,
   createPlDataTableV2,
+  getNumberOfRows,
   isPColumnSpec,
 } from "@platforma-sdk/model";
 import { kind } from "@platforma-open/milaboratories.embedding-clustering.kind";
 import { blockDataModel } from "./dataModel";
 import { deriveTemplateParams } from "./templateParams";
+import type { EmbeddingSize } from "./types";
+import { datasetKey, embeddingSizeKey, MAX_EMBEDDINGS } from "./types";
 
 export type * from "@milaboratories/helpers";
 export type * from "@platforma-open/milaboratories.embedding-clustering.kind";
 
-export type { BlockData } from "./types";
-export { getDefaultBlockLabel } from "./types";
+export type { BlockData, EmbeddingSize } from "./types";
+export { datasetKey, embeddingSizeKey, getDefaultBlockLabel, MAX_EMBEDDINGS } from "./types";
 export { blockDataModel, initBlockData } from "./dataModel";
 export { deriveTemplateParams } from "./templateParams";
 
@@ -33,6 +42,21 @@ function embeddingMatchesClonotypeAxis(
   return Object.keys(datasetDomain).every((k) => embDomain[k] === datasetDomain[k]);
 }
 
+// Number of embeddings in an embedding column, from metadata alone (no blob download). The column is
+// long-format [entity, embeddingDim] (one row per entity per dimension), so the entity count is its row
+// count divided by the vector length D from the `pl7.app/embedding/length` annotation.
+function measureEmbedding(col: PColumn<TreeNodeAccessor> | undefined): EmbeddingSize {
+  if (col === undefined || !col.data.getIsReadyOrError()) return { status: "pending" };
+  const dim = Number(col.spec.annotations?.["pl7.app/embedding/length"]);
+  if (!Number.isInteger(dim) || dim <= 0) return { status: "unknown" };
+  const rows = getNumberOfRows(col.data);
+  // Embedding columns are always Parquet (sequence-embeddings writes them so), and the column's
+  // readiness flag does not cover its chunks: a missing row count means the chunk metadata has not
+  // loaded yet, not that the column is uncountable.
+  if (rows === undefined) return { status: "pending" };
+  return { status: "counted", count: Math.round(rows / dim) };
+}
+
 export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind })
 
   .args((data) => {
@@ -41,6 +65,21 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
       throw new Error(
         "Connect a Sequence Embeddings output and pick an embedding column to cluster by embedding distance",
       );
+
+    // Size gate: HDBSCAN does not yet finish on inputs this large. The pick handler snapshots the
+    // embedding's size into `data.embeddingSize` together with the pick (the UI fills in a missing or
+    // pending snapshot once the size is known); a snapshot taken for another selection never opens
+    // the gate. An uncountable column ("unknown") does not block.
+    const size = data.embeddingSize;
+    if (size?.inputKey !== embeddingSizeKey(data) || size.status === "pending") {
+      throw new Error("Checking dataset size, please wait…");
+    }
+    if (size.status === "counted" && size.count > MAX_EMBEDDINGS) {
+      throw new Error(
+        `The selected embedding has ${size.count.toLocaleString()} sequences ` +
+          `(max ${MAX_EMBEDDINGS.toLocaleString()}). Datasets this large are not supported yet.`,
+      );
+    }
 
     // sequencesRef is auto-derived from the embedding column (for centroid/MSA display) and may be
     // empty; the embedding model is read from the column spec in the workflow, not snapshotted here.
@@ -197,11 +236,18 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
         embeddingMatchesClonotypeAxis(spec.axesSpec?.[0], cloneAxis),
       { label: { includeNativeLabel: true } },
     );
-    return options.map((o) => ({
-      ref: o.ref,
-      label: o.label,
-      feature: ctx.resultPool.getPColumnSpecByRef(o.ref)?.domain?.["pl7.app/feature"],
-    }));
+    // Stamped with the dataset it was computed for: right after a dataset switch this output still
+    // holds the previous dataset's list for a few seconds, and the UI must not offer it. Each option
+    // carries its size, which the pick handler snapshots into data for the `.args()` size gate.
+    return {
+      forDataset: datasetKey(ref),
+      options: options.map((o) => ({
+        ref: o.ref,
+        label: o.label,
+        feature: ctx.resultPool.getPColumnSpecByRef(o.ref)?.domain?.["pl7.app/feature"],
+        size: measureEmbedding(ctx.resultPool.getPColumnByRef(o.ref)),
+      })),
+    };
   })
 
   .output("isSingleCell", (ctx) => {
