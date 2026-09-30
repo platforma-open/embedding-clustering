@@ -215,6 +215,13 @@ wf.body(func(args) {
 		totalFractionName = "pl7.app/uniqueMoleculeFractionTotal"
 		abundanceUnit = "molecules"
 	}
+	// Directly imported sets count records, whatever the column name says.
+	if ac.annotations["pl7.app/abundance/unit"] == "variants" {
+		fractionName = "pl7.app/variantFraction"
+		totalCountName = "pl7.app/variantCountTotal"
+		totalFractionName = "pl7.app/variantFractionTotal"
+		abundanceUnit = "variants"
+	}
 
 	// De-anonymize TSV files that contain sampleId
 	// Run deanonymization as ephemeral to avoid cross-project deduplication while keeping
@@ -500,6 +507,9 @@ wf.body(func(args) {
 					fractionName := "pl7.app/readFraction"
 					if text.contains(ac.name, "uniqueMoleculeCount") {
 						fractionName = "pl7.app/uniqueMoleculeFraction"
+					}
+					if ac.annotations["pl7.app/abundance/unit"] == "variants" {
+						fractionName = "pl7.app/variantFraction"
 					}
 					return setTableProps(maps.deepMerge(ac, {
 						name: fractionName,
