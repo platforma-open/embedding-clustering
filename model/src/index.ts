@@ -164,7 +164,25 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
 
     const sequenceMatchers = [];
 
-    if (isPeptide) {
+    // synthetic-repertoire-profiler also keys on pl7.app/variantKey; its domain carries
+    // pl7.app/repertoire/extractionRunId.
+    const isAmplicon =
+      isPeptide &&
+      ctx.resultPool.getPColumnSpecByRef(ref)?.axesSpec[1].domain?.[
+        "pl7.app/repertoire/extractionRunId"
+      ] !== undefined;
+
+    if (isAmplicon) {
+      // synthetic-repertoire-profiler tags each sequence with a feature: the whole-variant
+      // sequence (feature "amplicon-sequence") and one per region (feature = region name)
+      sequenceMatchers.push({
+        axes: [{ anchor: "main", idx: 1 }],
+        name: "pl7.app/sequence",
+        domain: {
+          "pl7.app/alphabet": "aminoacid",
+        },
+      });
+    } else if (isPeptide) {
       sequenceMatchers.push({
         axes: [{ anchor: "main", idx: 1 }],
         name: "pl7.app/sequence",
