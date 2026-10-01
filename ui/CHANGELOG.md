@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0
+
+### Minor Changes
+
+- 523c0f7: Recognize synthetic-repertoire-profiler data in MSA
+
+### Patch Changes
+
+- Updated dependencies [523c0f7]
+  - @platforma-open/milaboratories.embedding-clustering.model@1.5.0
+
 ## 1.3.0
 
 ### Minor Changes

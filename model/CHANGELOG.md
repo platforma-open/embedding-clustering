@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0
+
+### Minor Changes
+
+- 523c0f7: Recognize synthetic-repertoire-profiler data in MSA
+
 ## 1.4.0
 
 ### Minor Changes
