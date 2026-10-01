@@ -114,7 +114,10 @@ function deriveSourceSeqRefs(embeddingRef: PlRef): SUniversalPColumnId[] {
   const isAa = (id: string) => domainOf(id)["pl7.app/alphabet"] === "aminoacid";
   const seqFeature = (id: string) => {
     const d = domainOf(id);
-    return d["pl7.app/vdj/feature"] ?? d["pl7.app/feature"];
+    const feature = d["pl7.app/vdj/feature"] ?? d["pl7.app/feature"];
+    // synthetic-repertoire-profiler's whole-variant sequence is the V-domain; sequence-embeddings
+    // tags its embedding as VDJRegion.
+    return feature === "amplicon-sequence" ? "VDJRegion" : feature;
   };
   // Fv = VH+VL VDJRegion concatenation -> both chains' VDJRegion source columns.
   if (embFeature === "Fv") {
