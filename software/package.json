@@ -23,7 +23,7 @@
           "artifact": {
             "type": "python",
             "registry": "platforma-open",
-            "environment": "@platforma-open/milaboratories.runenv-python-3:3.12.10",
+            "environment": "@platforma-open/milaboratories.runenv-python-3:3.12.10-embedding-clustering",
             "dependencies": {
               "toolset": "pip",
               "requirements": "requirements.txt"
@@ -41,7 +41,7 @@
           "artifact": {
             "type": "python",
             "registry": "platforma-open",
-            "environment": "@platforma-open/milaboratories.runenv-python-3:3.12.10",
+            "environment": "@platforma-open/milaboratories.runenv-python-3:3.12.10-embedding-clustering",
             "dependencies": {
               "toolset": "pip",
               "requirements": "requirements.txt"
@@ -59,7 +59,7 @@
           "artifact": {
             "type": "python",
             "registry": "platforma-open",
-            "environment": "@platforma-open/milaboratories.runenv-python-3:3.12.10",
+            "environment": "@platforma-open/milaboratories.runenv-python-3:3.12.10-embedding-clustering",
             "dependencies": {
               "toolset": "pip",
               "requirements": "requirements.txt"
@@ -77,7 +77,7 @@
           "artifact": {
             "type": "python",
             "registry": "platforma-open",
-            "environment": "@platforma-open/milaboratories.runenv-python-3:3.12.10",
+            "environment": "@platforma-open/milaboratories.runenv-python-3:3.12.10-embedding-clustering",
             "dependencies": {
               "toolset": "pip",
               "requirements": "requirements.txt"

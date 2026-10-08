@@ -34,9 +34,9 @@ clusters = pl.read_csv(clustersTsv, separator="\t", has_header=False,
                        new_columns=["clusterId", "clonotypeKey"])
 
 # --- Expand representatives back to all original clonotypeKeys ---
-# embedding_clustering.py no longer de-duplicates identical vectors (np.unique over the full matrix
-# cannot run at scale), so dedup_mapping is an IDENTITY mapping (each clonotype represents itself) and
-# this join is effectively 1:1 -- kept for contract compatibility with the representative/member schema.
+# embedding_clustering.py collapses clonotypes with identical embedding vectors to one representative;
+# dedup_mapping maps every clonotype to its representative, so this join gives each copy its
+# representative's cluster.
 dedup_mapping = pl.read_csv(dedupMappingTsv, separator="\t")
 # dedup_mapping has columns: representativeKey, clonotypeKey
 

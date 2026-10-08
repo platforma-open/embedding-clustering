@@ -3,42 +3,65 @@
 
 Streams one per-clonotype embedding matrix, reduces with centered PCA (95% variance, capped) fit
 INCREMENTALLY over the stream (IncrementalPCA -- so the full N x D matrix is never held: memory stays
-bounded by the reduced N x k array, not the raw embeddings), L2-normalizes, clusters with HDBSCAN
-(contrib hdbscan, dual-tree Boruvka MST, eom), then refines the result on two independent paths: a MAIN
-cluster is re-clustered only if it is a
-huge size-outlier (a group the first pass failed to divide, now dwarfing every other cluster), and --
-optionally, via --rescue-noise -- the HDBSCAN noise pile is re-clustered to rescue dense sub-groups
-(which are then split down to the fine cluster scale). Re-clustering re-derives PCA on the subset's
-ORIGINAL embedding vectors (EOM's "root-bias" / the global PCA collapse fine structure that a
-subset-local re-PCA re-exposes); those originals are held only for the points refinement can touch (the
-noise pile + huge-outlier members) -- in RAM when they fit RAM_BUDGET_GIB, else a disk memmap read in
-chunks. It then picks each cluster's medoid representative, sends the remaining noise to singleton
-clusters, and writes the files process_results.py consumes:
+bounded by the reduced N x k array, not the raw embeddings), L2-normalizes, collapses byte-identical reduced
+vectors (identical sequences embed identically) to one representative row each, clusters the representatives
+with HDBSCAN (fast_hdbscan: seeded pynndescent kNN graph -> mutual-reachability MST, eom), turns every identical
+group with >= min_cluster_size copies that HDBSCAN left as noise into its own cluster, then refines the result
+on two independent paths: a MAIN cluster is re-clustered only if it is a huge size-outlier (a group the first
+pass failed to divide, now dwarfing every other cluster), and -- optionally, via --rescue-noise -- the HDBSCAN
+noise pile is re-clustered once to rescue dense sub-groups no larger than the fine cluster scale (EOM size cap;
+anything bigger stays noise).
+Re-clustering re-derives PCA on the subset's ORIGINAL embedding vectors (EOM's "root-bias" / the global PCA
+collapse fine structure that a subset-local re-PCA re-exposes); those originals are held only for the points
+refinement can touch (the noise pile + huge-outlier members) -- in RAM when they fit RAM_BUDGET_GIB, else a
+disk memmap read in chunks. Everything after the collapse -- clustering, refinement thresholds, medoids --
+works on the representatives only; copies inherit their representative's cluster when the outputs are written.
+It then picks each cluster's medoid representative, sends the remaining noise to singleton clusters, and
+writes the files process_results.py consumes:
 
   clusters.tsv          headerless (clusterId, clonotypeKey) -- both representative keys,
                         clusterId = the cluster's medoid representative, one row per representative.
   dedup_mapping.tsv     headered  (representativeKey, clonotypeKey) -- one row per original clonotype;
-                        process_results.py joins it by column name to expand reps -> members. Identical
-                        vectors are NO LONGER de-duplicated, so this is an identity mapping.
+                        process_results.py joins it by column name to expand reps -> members. A clonotype's
+                        representative is the first clonotype (in stream order) with the identical vector.
   centroid_distances.tsv  headered (representativeKey, distance) -- cosine distance to the cluster
                         medoid in the reduced/normalized space; one row per representative,
                         noise singletons at distance 0 (so the downstream expansion join is complete).
 
-The path runs on scikit-learn (PCA) + hdbscan + numpy (pyarrow/polars for the streaming read).
+Results are reproducible for a given input: the kNN graph is seeded (KNN_SEED), numba runs a fixed number of
+threads (CLUSTER_THREADS -- the partitioning of the parallel kNN work changes the result) and compiles for a
+generic CPU (NUMBA_CPU_NAME=generic -- host-specific SIMD would round differently per machine).
+
+The path runs on scikit-learn (PCA) + fast_hdbscan/pynndescent/numba + numpy (pyarrow/polars for the read).
 """
 import warnings
 warnings.simplefilter("ignore", category=FutureWarning)  # match block convention (calculate_dim_reduction.py)
 
-import argparse
 import os
+
+# numba (pulled in by fast_hdbscan) reads these when it is first imported, so they must be set here, before any
+# import that loads it. setdefault keeps explicit overrides from the environment (e.g. in tests).
+CLUSTER_THREADS = 8   # fixed: the kNN graph depends on the thread count; more than 8 gave no speed-up
+os.environ.setdefault("NUMBA_NUM_THREADS", str(CLUSTER_THREADS))
+os.environ.setdefault("NUMBA_CPU_NAME", "generic")
+os.environ.setdefault("NUMBA_CACHE_DIR", os.path.join(os.getcwd(), ".numba_cache"))   # software dir may be read-only
+
+import argparse
 import resource
 import sys
+import threading
 import time
 
-import hdbscan
+import numba
 import numpy as np
+from fast_hdbscan.nndescent import compute_mst_from_knn_graph
 from sklearn.decomposition import PCA, IncrementalPCA
 from sklearn.metrics import pairwise_distances
+
+from fast_eom import cluster_labels
+from hash_dedup import identical_row_groups
+
+KNN_SEED = 42           # random_state of the pynndescent kNN graph
 
 
 # Above this in-RAM full-SVD re-PCA footprint, refinement subsets are handled off-RAM (memmap + chunked
@@ -66,6 +89,68 @@ def _peak_rss_gib():
 def _full_svd_fits(m, D):
     """Whether an in-RAM full-SVD re-PCA of m vectors x D dims stays within RAM_BUDGET_GIB."""
     return _SVD_PEAK_FACTOR * m * D * 4 <= RAM_BUDGET_GIB * (1024 ** 3)
+
+
+# --- HDBSCAN (fast_hdbscan) -----------------------------------------------------------------------
+
+def _in_big_stack(fn, stack_mb=4096):
+    """Run fn() in a thread with a `stack_mb` MiB stack and return its result. fast_hdbscan's compiled code
+    recurses over the cluster tree, which overflows the default 8 MiB stack on large, deep trees (SIGSEGV);
+    numba code runs on the calling thread's stack."""
+    box = {}
+
+    def target():
+        try:
+            box["out"] = fn()
+        except BaseException as e:      # re-raised in the caller
+            box["err"] = e
+
+    prev = threading.stack_size(stack_mb * 1024 * 1024)
+    try:
+        t = threading.Thread(target=target)
+        t.start()
+    finally:
+        threading.stack_size(prev)
+    t.join()
+    if "err" in box:
+        raise box["err"]
+    return box["out"]
+
+
+def hdbscan_fit(X, min_cluster_size, min_samples, max_cluster_size=np.inf):
+    """HDBSCAN (eom) on the L2-normalized rows of X. Returns (labels, probs): labels 0..k-1 with -1 for noise,
+    probs the membership strengths. The mutual-reachability MST comes from a seeded pynndescent kNN graph
+    (fast_hdbscan's path for > 30 dims, with its random_state exposed) and cluster selection uses fast_eom's
+    EOM (contrib hdbscan's accepted fix); labels match fast_hdbscan.HDBSCAN on the same graph.
+    max_cluster_size is EOM's size cap (see fast_eom.cluster_labels). With <= min_samples rows no point has
+    enough neighbours for a core distance, so everything is noise."""
+    X = np.ascontiguousarray(X, dtype=np.float32)
+    n = X.shape[0]
+    if n <= min_samples:
+        return np.full(n, -1, dtype=np.int64), np.zeros(n)
+    # fast_hdbscan's default graph size; on a tiny input use every other point (complete graph -> exact MST)
+    knn_k = max(3 * min_samples, 15)
+    knn_k = None if n - 1 > knn_k else n - 1
+
+    def run():
+        numba.set_num_threads(CLUSTER_THREADS)     # thread-local in numba: must be set in the fitting thread
+        mst, _, _ = compute_mst_from_knn_graph(X, min_samples=min_samples, knn_k=knn_k, random_state=KNN_SEED)
+        return cluster_labels(mst, min_cluster_size, max_cluster_size)
+
+    labels, probs = _in_big_stack(run)
+    return np.asarray(labels, dtype=np.int64), np.asarray(probs, dtype=np.float64)
+
+
+def rescue_identical_groups(labels, probs, copies, min_cluster_size, next_id):
+    """Every representative left as noise whose vector has >= min_cluster_size identical copies becomes its own
+    cluster (membership 1.0). Collapsing copies removes the density they gave HDBSCAN, so such a group -- an
+    expanded or shared sequence -- would otherwise be lost to noise. Modifies labels/probs in place; returns the
+    number of groups rescued. next_id is a one-element list holding the next free cluster id."""
+    rows = np.flatnonzero((labels == -1) & (copies >= min_cluster_size))
+    labels[rows] = next_id[0] + np.arange(rows.size)
+    probs[rows] = 1.0
+    next_id[0] += int(rows.size)
+    return int(rows.size)
 
 
 def _pick_k_95(explained_variance_ratio, cap):
@@ -123,17 +208,27 @@ def approx_weighted_medoid(X, idx, weights=None):
     return int(idx[int((Xc @ (c / n)).argmax())])   # member with max cosine to centroid direction
 
 
+def cluster_groups(labels):
+    """Yield (cluster id, member row indices in ascending order) for every non-noise cluster, in ascending
+    cluster id."""
+    #  Sort the row numbers by label
+    order = np.argsort(labels, kind="stable")
+    #  Find where each label starts, and how many rows it has
+    ids, starts, counts = np.unique(labels[order], return_index=True, return_counts=True)
+    for cid, start, count in zip(ids, starts, counts):
+        if cid != -1:                        # skip HDBSCAN noise
+             # Hand out each cluster's slice
+            yield int(cid), order[start:start + count]
+
+
 def cluster_medoids(X, labels, weights=None, exact_max=4000):
     """Medoid (global row index) per non-noise cluster. EXACT for clusters with <= exact_max members
     (the O(m^2) matrix is bounded: 4000 -> ~128 MB float64), APPROXIMATE O(m) above that. Cost scales
     with per-CLUSTER size, so for huge N made of small clusters the exact path is already cheap."""
     medoids = {}
-    for cid in np.unique(labels):
-        if cid == -1:                        # skip HDBSCAN noise
-            continue
-        idx = np.where(labels == cid)[0]
+    for cid, idx in cluster_groups(labels):
         fn = weighted_medoid if len(idx) <= exact_max else approx_weighted_medoid
-        medoids[int(cid)] = fn(X, idx, weights)
+        medoids[cid] = fn(X, idx, weights)
     return medoids
 
 
@@ -352,7 +447,7 @@ def _reduce_subset(store, pos, D, pca_cap):
     return out
 
 
-def _subcluster(store, gpos, idx, D, min_cluster_size, min_samples, pca_cap):
+def _subcluster(store, gpos, idx, D, min_cluster_size, min_samples, pca_cap, max_cluster_size=np.inf):
     """Re-PCA (95% var, on the subset's ORIGINAL embedding vectors) -> L2-normalize -> HDBSCAN(eom).
     Re-deriving PCA on just the subset re-expresses its LOCAL variance structure, which the global PCA
     collapses -- this is what lets a giant cluster (or the noise pile) resolve into real sub-clusters.
@@ -370,41 +465,38 @@ def _subcluster(store, gpos, idx, D, min_cluster_size, min_samples, pca_cap):
     Xn = l2_normalize(Xr)
     valid = np.linalg.norm(Xr, axis=1) > 1e-8   # drop degenerate (near-zero post-PCA) rows, as main pass
     if valid.sum() >= min_cluster_size:
-        # contrib hdbscan: algorithm defaults to "best", which picks the dual-tree Boruvka MST for our
-        # low-dim (post-PCA) space -- ~4x faster than sklearn's HDBSCAN, which has no Boruvka path.
-        clu = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
-                              metric="euclidean", cluster_selection_method="eom",
-                              core_dist_n_jobs=-1).fit(Xn[valid])
-        labels[valid] = clu.labels_
-        probs[valid] = clu.probabilities_
+        labels[valid], probs[valid] = hdbscan_fit(Xn[valid], min_cluster_size, min_samples, max_cluster_size)
     return labels, probs
 
 
-def run_clustering(Xr, keys, D, k, pf, key_col, dim_col, value_col, workdir,
+def run_clustering(Xr, keys, copies, n_clonotypes, D, k, pf, key_col, dim_col, value_col, workdir,
                    min_cluster_size=2, min_samples=5, pca_cap=500, exact_max=4000, rescue_noise=False):
-    """Pure-ish core. Xr: (N, k) globally-reduced per-clonotype matrix. keys: (N,) clonotype keys.
+    """Pure-ish core, on REPRESENTATIVES only (one row per distinct reduced vector). Xr: (M, k) globally-reduced
+    representative matrix. keys: (M,) representative clonotype keys. copies: (M,) how many clonotypes share
+    each representative's vector. n_clonotypes: total clonotypes (for the stats only).
     pf + *_col + D let refinement re-read the ORIGINAL vectors it needs (see build_refined_store).
     rescue_noise: if True, re-cluster the main-pass noise pile once to rescue dense sub-groups.
+    Refinement thresholds and medoids count representatives, not copies: identical clonotypes are one entity.
     Returns a dict:
-      rep_keys           (N,)   representative key per clonotype (== its own key; dedup dropped)
-      cluster_id         (N,)   clusterId for each representative (medoid repkey, or self if noise)
-      member_rep_keys    (N,)   representative key for every clonotype (identity mapping for dedup_mapping)
-      distance           (N,)   cosine distance of each representative to its cluster medoid (0 for noise)
-      stats              dict   as before (n_unique == N now).
+      rep_keys           (M,)   representative keys (== keys)
+      cluster_id         (M,)   clusterId for each representative (medoid repkey, or self if noise)
+      distance           (M,)   cosine distance of each representative to its cluster medoid (0 for noise)
+      stats              dict   clustering statistics.
     """
-    N = Xr.shape[0]
-    M = N
+    N = n_clonotypes
+    M = Xr.shape[0]
     rep_keys = keys
-    member_rep_keys = keys.copy()          # dedup dropped -> every clonotype represents itself
 
     if M < max(2, min_cluster_size):
-        # Too few vectors to form a cluster: every clonotype is its own singleton.
-        return dict(rep_keys=rep_keys, cluster_id=rep_keys.copy(), member_rep_keys=member_rep_keys,
+        # Too few distinct vectors to form a cluster: every representative is its own singleton. Copies of a
+        # representative still end up under its id when the outputs are expanded through dedup_mapping.
+        return dict(rep_keys=rep_keys, cluster_id=rep_keys.copy(),
                     distance=np.zeros(M), stats=dict(N=N, n_unique=M, k_pca=k, n_clusters=0,
                                                      noise_fraction=1.0, n_degenerate=0,
                                                      n_clusters_initial=0, main_split_threshold=0,
-                                                     noise_split_threshold=0, n_main_split=0,
-                                                     n_noise_split=0, n_clusters_from_noise=0))
+                                                     noise_max_cluster_size=0, n_main_split=0,
+                                                     n_clusters_from_noise=0,
+                                                     n_identical_rescued=0))
 
     log("step: L2-normalize + initial HDBSCAN on the global reduction ...")
     Xn = l2_normalize(Xr)
@@ -421,14 +513,10 @@ def run_clustering(Xr, keys, D, k, pf, key_col, dim_col, value_col, workdir,
     probs = np.zeros(M)
     if valid.sum() >= min_cluster_size:
         log(f"step: initial HDBSCAN (eom, min_cluster_size={min_cluster_size}, min_samples={min_samples}) "
-            f"on {int(valid.sum())} vectors (PCA k={k}) ...")
-        # contrib hdbscan: algorithm defaults to "best", which picks the dual-tree Boruvka MST for our
-        # low-dim (post-PCA) space -- ~4x faster than sklearn's HDBSCAN, which has no Boruvka path.
-        clu = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
-                              metric="euclidean", cluster_selection_method="eom",
-                              core_dist_n_jobs=-1).fit(Xn[valid])
-        labels[valid] = clu.labels_
-        probs[valid] = clu.probabilities_
+            f"on {int(valid.sum())} representative vectors (PCA k={k}, {CLUSTER_THREADS} threads) ...")
+        t0 = time.time()
+        labels[valid], probs[valid] = hdbscan_fit(Xn[valid], min_cluster_size, min_samples)
+        log(f"  HDBSCAN done in {time.time() - t0:.1f}s (peak RSS {_peak_rss_gib():.2f} GiB)")
 
     # --- Recursive refinement --------------------------------------------------------------------
     # Two re-clustering paths, each with its own size trigger, run one after the other:
@@ -438,31 +526,39 @@ def run_clustering(Xr, keys, D, k, pf, key_col, dim_col, value_col, workdir,
     #       for small/coarse sets), but never a group smaller than `split_floor`. Normal clusters are left
     #       untouched. Any leftover it produces drops to noise and is folded into (2).
     #   (2) NOISE-rescued clusters (OPTIONAL, gated by rescue_noise): re-cluster the noise pile ONCE
-    #       -- the main-pass noise PLUS any leftover from (1) -- to rescue dense sub-groups, then split
-    #       those down to the fine scale (> min(P99, split_cap)).
+    #       -- the main-pass noise PLUS any leftover from (1) -- to rescue dense sub-groups, with EOM capped
+    #       at the fine cluster scale min(P99, noise_cap): a group larger than that is never kept, so a
+    #       noise pile that has no real small groups stays noise instead of collapsing into one giant
+    #       cluster (EOM root bias on a structureless subset). No recursive split is needed after it.
     # Re-clustering re-derives PCA on the subset only (EOM's root-bias / the global PCA collapse fine
-    # structure a subset-local re-PCA re-exposes). A cluster that won't split (re-clustering yields <2) is
-    # kept whole; points still unassigned after (2) become singleton clusters at the end. Recursion is
-    # depth-capped. Medoids/distances are computed once below, uniformly in the GLOBAL normalized space.
+    # structure a subset-local re-PCA re-exposes). A MAIN cluster that won't split (re-clustering yields <2)
+    # is kept whole; points still unassigned after (2) become singleton clusters at the end. The MAIN split's
+    # recursion is depth-capped. Medoids/distances are computed once below, in the GLOBAL normalized space.
     MAIN_RECLUSTER_RATIO = 1000   # a MAIN cluster is a "huge outlier" if > this many x the 99th-pct size
     split_floor = 50              # never re-cluster a MAIN group smaller than this
-    split_cap = 50                # NOISE-rescued clusters are split down toward this size
+    noise_cap = 50                # NOISE-rescued clusters are at most this size (or the 99th pct, if smaller)
     max_depth = 3
     n_clusters_initial = len(np.unique(labels[labels >= 0])) if (labels >= 0).any() else 0
     _, main_sizes = np.unique(labels[labels >= 0], return_counts=True)   # per-cluster sizes, noise (-1) excluded
     p99 = int(np.ceil(np.percentile(main_sizes, 99))) if main_sizes.size else 0
     main_split_threshold = max(split_floor, min(MAIN_RECLUSTER_RATIO * p99, M // 2)) if main_sizes.size else M // 2
-    noise_split_threshold = min(p99, split_cap) if main_sizes.size else split_cap
+    noise_max_cluster_size = min(p99, noise_cap) if main_sizes.size else noise_cap
     main_cluster_ids = [int(c) for c in np.unique(labels) if c != -1]   # snapshot BEFORE rescue/splitting
     next_id = [int(labels.max()) + 1 if (labels >= 0).any() else 0]
     log(f"initial clustering -> {n_clusters_initial} clusters, {(labels == -1).mean():.1%} noise; "
-        f"99th pct of main cluster sizes = {p99} -> noise-split threshold = {noise_split_threshold} "
-        f"(min of that and cap {split_cap}); main-split threshold = {main_split_threshold}")
+        f"99th pct of main cluster sizes = {p99} -> noise-rescue max cluster size = {noise_max_cluster_size} "
+        f"(min of that and cap {noise_cap}); main-split threshold = {main_split_threshold}")
+    # Identical groups HDBSCAN left as noise become clusters now, before refinement, so they stay out of the
+    # noise pile. The thresholds above are computed from HDBSCAN's own clusters only.
+    n_identical_rescued = rescue_identical_groups(labels, probs, copies, min_cluster_size, next_id)
+    log(f"{n_identical_rescued} noise sequences shared by >= {min_cluster_size} identical clonotypes "
+        f"-> each made its own cluster")
 
     # The points refinement can ever touch: the noise pile (if rescue) + members of the oversized MAIN
     # clusters (their split leftover folds into the noise pile, which is already covered). Store only
     # those originals, then run refinement against that store.
-    oversized_main = [c for c in main_cluster_ids if (labels == c).sum() > main_split_threshold]
+    cluster_sizes = np.bincount(labels[labels >= 0])   # one pass; rescued identical groups add ids past the snapshot
+    oversized_main = [c for c in main_cluster_ids if cluster_sizes[c] > main_split_threshold]
     refined_mask = (labels == -1) if rescue_noise else np.zeros(M, dtype=bool)
     for c in oversized_main:
         refined_mask |= (labels == c)
@@ -477,18 +573,18 @@ def run_clustering(Xr, keys, D, k, pf, key_col, dim_col, value_col, workdir,
         max_depth) and send leftover sub-noise to -1 (final singletons, not re-clustered). If it does
         NOT split (<2 sub-clusters) leave member_idx unchanged. Returns #sub-clusters (0 = no split)."""
         sub_lab, sub_prob = _subcluster(store, gpos, member_idx, D, min_cluster_size, min_samples, pca_cap)
-        found = [s for s in np.unique(sub_lab) if s != -1]
+        found = list(cluster_groups(sub_lab))           # (sub-cluster id, positions within member_idx)
         if len(found) < 2:
             return 0
         leftover = member_idx[sub_lab == -1]
         labels[leftover] = -1
         probs[leftover] = 0.0
-        for s in found:
-            rows = member_idx[sub_lab == s]
+        for _, pos in found:
+            rows = member_idx[pos]
             if len(rows) > threshold and depth < max_depth and split_recursive(rows, depth + 1, threshold) > 0:
                 continue                                # children already relabeled by the recursive call
             labels[rows] = next_id[0]
-            probs[rows] = sub_prob[sub_lab == s]
+            probs[rows] = sub_prob[pos]
             next_id[0] += 1
         return len(found)
 
@@ -496,7 +592,6 @@ def run_clustering(Xr, keys, D, k, pf, key_col, dim_col, value_col, workdir,
     # re-clustering raises. Counters are initialised before the try so the stats below are always defined.
     n_main_split = 0
     n_clusters_from_noise = 0
-    n_noise_split = 0
     try:
         # (1) MAIN path: re-cluster only the rare huge-outlier group(s). Iterate the initial-pass snapshot
         #     so fresh sub-cluster ids (created by the recursion) are not re-processed. Runs BEFORE the
@@ -513,29 +608,20 @@ def run_clustering(Xr, keys, D, k, pf, key_col, dim_col, value_col, workdir,
                 f"main clusters left as-is")
 
         # (2) NOISE path (optional): rescue the noise pile once -- the main-pass noise plus any leftover
-        #     the MAIN split produced above -- then split the rescued clusters down to the fine scale.
+        #     the MAIN split produced above -- keeping only groups no larger than noise_max_cluster_size.
         if rescue_noise:
             noise_idx = np.where(labels == -1)[0]
-            log(f"step: NOISE re-clustering ENABLED -- re-clustering {len(noise_idx)} noise points ...")
-            rescued_ids = []
+            log(f"step: NOISE re-clustering ENABLED -- re-clustering {len(noise_idx)} noise points "
+                f"(max cluster size {noise_max_cluster_size}) ...")
             if len(noise_idx) >= min_cluster_size:
-                sub_lab, sub_prob = _subcluster(store, gpos, noise_idx, D, min_cluster_size, min_samples, pca_cap)
-                for s in [v for v in np.unique(sub_lab) if v != -1]:
-                    rows = noise_idx[sub_lab == s]
-                    labels[rows] = next_id[0]
-                    probs[rows] = sub_prob[sub_lab == s]
-                    rescued_ids.append(next_id[0])
+                sub_lab, sub_prob = _subcluster(store, gpos, noise_idx, D, min_cluster_size, min_samples, pca_cap,
+                                                max_cluster_size=noise_max_cluster_size)
+                for _, pos in cluster_groups(sub_lab):
+                    labels[noise_idx[pos]] = next_id[0]
+                    probs[noise_idx[pos]] = sub_prob[pos]
                     next_id[0] += 1
                     n_clusters_from_noise += 1
             log(f"  NOISE re-clustering -> rescued {n_clusters_from_noise} cluster(s) from noise")
-            oversized_noise = [c for c in rescued_ids if (labels == c).sum() > noise_split_threshold]
-            if oversized_noise:
-                log(f"step: splitting NOISE-rescued clusters -- {len(oversized_noise)} exceed threshold "
-                    f"{noise_split_threshold} ...")
-                for cid in oversized_noise:
-                    if split_recursive(np.where(labels == cid)[0], 0, noise_split_threshold) > 0:
-                        n_noise_split += 1
-                log(f"  NOISE-rescued split -> {n_noise_split} cluster(s) split")
         else:
             log("step: NOISE re-clustering disabled")
     finally:
@@ -547,13 +633,21 @@ def run_clustering(Xr, keys, D, k, pf, key_col, dim_col, value_col, workdir,
             except OSError:
                 pass
 
+    # Refinement can send representatives back to noise (split leftovers); identical groups among them get the
+    # same treatment as after the initial pass.
+    n_late = rescue_identical_groups(labels, probs, copies, min_cluster_size, next_id)
+    if n_late:
+        log(f"{n_late} sequences left as noise by refinement, shared by >= {min_cluster_size} identical "
+            f"clonotypes -> each made its own cluster")
+    n_identical_rescued += n_late
+
     log("step: computing cluster medoids + centroid distances ...")
     medoids = cluster_medoids(Xn, labels, weights=probs, exact_max=exact_max)   # {cid: row index}
 
     cluster_id = rep_keys.copy()          # default = self (covers noise singletons)
     distance = np.zeros(M)
-    for cid, mrow in medoids.items():
-        members = np.where(labels == cid)[0]
+    for cid, members in cluster_groups(labels):
+        mrow = medoids[cid]
         cluster_id[members] = rep_keys[mrow]
         # cosine distance to the medoid in the normalized space (unit vectors -> 1 - dot), clipped to
         # [0, 2] since float error can push the dot product slightly past 1 -> a tiny negative distance.
@@ -561,13 +655,41 @@ def run_clustering(Xr, keys, D, k, pf, key_col, dim_col, value_col, workdir,
 
     n_clusters = len(medoids)
     noise_fraction = float((labels == -1).mean())
-    return dict(rep_keys=rep_keys, cluster_id=cluster_id, member_rep_keys=member_rep_keys,
-                distance=distance,
+    return dict(rep_keys=rep_keys, cluster_id=cluster_id, distance=distance,
                 stats=dict(N=N, n_unique=M, k_pca=k, n_clusters=n_clusters,
                            noise_fraction=noise_fraction, n_degenerate=n_degenerate,
                            n_clusters_initial=n_clusters_initial, main_split_threshold=main_split_threshold,
-                           noise_split_threshold=noise_split_threshold, n_main_split=n_main_split,
-                           n_noise_split=n_noise_split, n_clusters_from_noise=n_clusters_from_noise))
+                           noise_max_cluster_size=noise_max_cluster_size, n_main_split=n_main_split,
+                           n_clusters_from_noise=n_clusters_from_noise,
+                           n_identical_rescued=n_identical_rescued))
+
+
+def collapse_identical(Xr, chunk=1_000_000):
+    """Collapse byte-identical rows of the reduced matrix Xr (N, k) to one representative each -- the first
+    row (lowest index) of every identical group. Identical inputs reduce to identical rows (PCA transform is
+    row-wise), so this collapses identical embeddings. Compacts Xr IN PLACE (no second N x k matrix).
+    Returns (Xu, rep_rows, rep_of, copies):
+      Xu        (M, k) view of Xr's first M rows: the representative vectors, in row order
+      rep_rows  (M,)   original row index of each representative (ascending)
+      rep_of    (N,)   representative index (0..M-1) of every original row
+      copies    (M,)   number of rows sharing each representative's vector"""
+    # rep points to original row numbers 
+    rep = identical_row_groups(Xr)                       # rep[i] = lowest row identical to row i
+    # A row is a representative when it points to itself
+    rep_rows = np.flatnonzero(rep == np.arange(rep.shape[0]))
+    # Rename representatives
+    pos = np.full(rep.shape[0], -1, dtype=np.int64)
+    pos[rep_rows] = np.arange(rep_rows.shape[0])
+    # rep_of states for every clonotype, which representative it belongs to
+    rep_of = pos[rep]
+    del rep, pos
+    # Count how many clonotypes share each representative
+    copies = np.bincount(rep_of, minlength=rep_rows.shape[0])
+    # Move the representative rows to the front, inside of the matrix
+    for i in range(0, rep_rows.shape[0], chunk):
+        src = rep_rows[i:i + chunk]
+        Xr[i:i + src.shape[0]] = Xr[src]
+    return Xr[:rep_rows.shape[0]], rep_rows, rep_of, copies
 
 
 # --- I/O ----------------------------------------------------------------------------------------
@@ -586,7 +708,7 @@ def main():
                          "annotation; when omitted D is inferred as max(embeddingDim)+1")
     ap.add_argument("--rescue-noise", action="store_true",
                     help="re-cluster the HDBSCAN noise pile once to rescue dense sub-groups "
-                         "(rescued clusters are then subject to the recursive size split)")
+                         "(only groups up to the fine cluster scale are kept; larger groups stay noise)")
     args = ap.parse_args()
 
     log(f"opening {args.matrix} ...")
@@ -604,17 +726,29 @@ def main():
     log(f"streaming + IncrementalPCA reduction (D={D}) ...")
     Xr, keys, k = stream_reduce(pf, args.key_col, args.dim_col, args.value_col, D, args.pca_cap)
 
-    res = run_clustering(Xr, keys, D, k, pf, args.key_col, args.dim_col, args.value_col, workdir,
+    log("step: collapsing identical reduced vectors ...")
+    Xu, rep_rows, rep_of, copies = collapse_identical(Xr)
+    del Xr                                        # Xu is a view of its first rows
+    keys_u = keys[rep_rows]
+    del rep_rows
+    log(f"  {Xu.shape[0]:,} distinct vectors for {keys.shape[0]:,} clonotypes "
+        f"({keys.shape[0] - Xu.shape[0]:,} identical copies collapsed; largest group {int(copies.max()):,})")
+
+    res = run_clustering(Xu, keys_u, copies, keys.shape[0], D, k, pf, args.key_col, args.dim_col,
+                         args.value_col, workdir,
                          min_cluster_size=args.min_cluster_size, min_samples=args.min_samples,
                          pca_cap=args.pca_cap, rescue_noise=args.rescue_noise)
     s = res["stats"]
-    log(f"clonotypes={s['N']}, PCA k={s['k_pca']}, "
+    log(f"clonotypes={s['N']}, distinct vectors={s['n_unique']}, PCA k={s['k_pca']}, "
         f"clusters={s['n_clusters']} (initial {s['n_clusters_initial']}, "
+        f"+{s['n_identical_rescued']} identical groups, "
         f"+{s['n_clusters_from_noise']} rescued from noise [rescue={args.rescue_noise}]; "
         f"MAIN split {s['n_main_split']} at >{s['main_split_threshold']}, "
-        f"NOISE split {s['n_noise_split']} at >{s['noise_split_threshold']}), "
-        f"noise={s['noise_fraction']:.1%}, degenerate={s['n_degenerate']}")
+        f"noise-rescue max cluster size {s['noise_max_cluster_size']}), "
+        f"noise={s['noise_fraction']:.1%} of distinct vectors, degenerate={s['n_degenerate']}")
 
+    # Copies inherit their representative's cluster: dedup_mapping.tsv maps every clonotype to it.
+    res["member_rep_keys"] = keys_u[rep_of]
     write_outputs(res, keys)
     log("wrote clusters.tsv, dedup_mapping.tsv, centroid_distances.tsv")
     log(f"peak RSS for clustering run: {_peak_rss_gib():.2f} GiB "
@@ -630,7 +764,8 @@ def write_outputs(res, keys):
     pl.DataFrame({"clusterId": [str(c) for c in res["cluster_id"]], "clonotypeKey": rep}) \
         .write_csv("clusters.tsv", separator="\t", include_header=False)
     # dedup_mapping.tsv -- HEADERED (representativeKey, clonotypeKey), one row per original clonotype;
-    # process_results.py joins on these columns to expand rep -> members. Identity mapping (dedup dropped).
+    # process_results.py joins on these columns to expand rep -> members (copies of an identical vector share
+    # one representative).
     pl.DataFrame({"representativeKey": [str(k) for k in res["member_rep_keys"]],
                   "clonotypeKey": [str(k) for k in keys]}) \
         .write_csv("dedup_mapping.tsv", separator="\t", include_header=True)
