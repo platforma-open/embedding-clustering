@@ -133,7 +133,7 @@ self.body(func(inputs) {
 			embClustBuilder = embClustBuilder.resources({
 				onCPU: {
 					cpu: cpu,
-					ram: size.times(8).plus(f.gib(24)).between(f.gib(32), f.gib(96)).staticFallback(f.gib(64))
+					ram: size.times(8).plus(f.gib(24)).between(f.gib(32), f.gib(256)).staticFallback(f.gib(64))
 				}
 			})
 		}
