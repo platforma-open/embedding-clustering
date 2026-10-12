@@ -1,6 +1,5 @@
 import {
   datasetKey,
-  embeddingSizeKey,
   getDefaultBlockLabel,
   platforma,
 } from "@platforma-open/milaboratories.embedding-clustering.model";
@@ -17,7 +16,6 @@ export const sdkPlugin = defineAppV3(platforma, (app) => {
 
   syncDefaultBlockLabel(app.model);
   reconcileEmbeddingSelection(app.model);
-  refreshEmbeddingSize(app.model);
 
   return {
     progress: () => {
@@ -61,22 +59,6 @@ function syncDefaultBlockLabel(model: AppModel) {
       embeddingLabel,
       minClusterSize: model.data.minClusterSize,
     });
-  });
-}
-
-function refreshEmbeddingSize(model: AppModel) {
-  // The pick handler snapshots the embedding's size into data with the pick.
-  watchEffect(() => {
-    const ref = model.data.embeddingRef;
-    if (ref === undefined) return;
-    const inputKey = embeddingSizeKey(model.data);
-    const current = model.data.embeddingSize;
-    if (current?.inputKey === inputKey && current.status !== "pending") return;
-    const live = currentEmbeddingOptions(model)?.find(
-      (o) => o.ref.blockId === ref.blockId && o.ref.name === ref.name,
-    )?.size;
-    if (live === undefined || live.status === "pending") return;
-    model.data.embeddingSize = { ...live, inputKey };
   });
 }
 

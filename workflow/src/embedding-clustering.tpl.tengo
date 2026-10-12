@@ -95,15 +95,18 @@ self.body(func(inputs) {
 			isEmpty: true
 		}
 	} else {
-		cpu := 16
+		// 8 cores: the clustering's parallel phases stop speeding up beyond 8, and the software pins 8 numba
+		// threads (a fixed thread count keeps results reproducible).
+		cpu := 8
 		if !is_undefined(inputs.cpu) {
 			cpu = inputs.cpu
 		}
 
 		// Step 1: embedding-distance clustering. Streamed load + IncrementalPCA-95 (cap 500) ->
-		// L2-normalize -> HDBSCAN(eom) -> recursive size split (+ optional noise rescue) -> medoid
-		// representative; leftover noise -> singleton clusters. Emits a headerless clusters.tsv
-		// (rep -> cluster), a headered dedup_mapping.tsv (identity mapping; dedup dropped) and a headered
+		// L2-normalize -> collapse identical vectors -> HDBSCAN(eom) on the representatives -> split of huge
+		// outlier clusters (+ optional size-capped noise rescue) -> medoid representative; leftover noise ->
+		// singleton clusters. Emits a headerless clusters.tsv (rep -> cluster), a headered dedup_mapping.tsv
+		// (clonotype -> representative) and a headered
 		// centroid_distances.tsv (per-representative cosine distance to the medoid).
 		embClustBuilder := exec.builder().
 			software(embeddingClusteringSw).
@@ -130,7 +133,7 @@ self.body(func(inputs) {
 			embClustBuilder = embClustBuilder.resources({
 				onCPU: {
 					cpu: cpu,
-					ram: size.times(8).plus(f.gib(24)).between(f.gib(32), f.gib(96)).staticFallback(f.gib(64))
+					ram: size.times(8).plus(f.gib(24)).between(f.gib(32), f.gib(256)).staticFallback(f.gib(64))
 				}
 			})
 		}

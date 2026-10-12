@@ -1,10 +1,6 @@
 <script setup lang="ts">
 import { PlMultiSequenceAlignment } from "@milaboratories/multi-sequence-alignment";
 import strings from "@milaboratories/strings";
-import {
-  embeddingSizeKey,
-  MAX_EMBEDDINGS,
-} from "@platforma-open/milaboratories.embedding-clustering.model";
 import type {
   AxisId,
   PColumnIdAndSpec,
@@ -138,51 +134,12 @@ function deriveSourceSeqRefs(embeddingRef: PlRef): SUniversalPColumnId[] {
     .map((o) => o.value);
 }
 
-// The dataset-scoped option for an embedding ref, if the current list holds it.
-const findEmbeddingOption = (ref: PlRef) =>
-  currentEmbeddingOptions(app.model)?.find(
-    (o) => o.ref.blockId === ref.blockId && o.ref.name === ref.name,
-  );
-
-// On embedding-column pick: store the ref, auto-derive the source sequence column(s) for the
-// centroid/MSA display, and snapshot the embedding's size for the `.args()` size gate — all in the
-// same gesture, so the pick and its size reach the backend in one save.
+// On embedding-column pick: store the ref and auto-derive the source sequence column(s) for the
+// centroid/MSA display in the same gesture.
 function onEmbeddingRefChange(ref?: PlRef) {
   app.model.data.embeddingRef = ref;
   app.model.data.sequencesRef = ref ? deriveSourceSeqRefs(ref) : [];
-  app.model.data.embeddingSize = ref
-    ? {
-        ...(findEmbeddingOption(ref)?.size ?? { status: "pending" }),
-        inputKey: embeddingSizeKey(app.model.data),
-      }
-    : undefined;
 }
-
-// The size snapshot for the current pick, or undefined when there is none for this selection (e.g. a
-// block created from a template) — the same condition `.args()` checks.
-const embeddingSize = computed(() => {
-  const size = app.model.data.embeddingSize;
-  return size?.inputKey === embeddingSizeKey(app.model.data) ? size : undefined;
-});
-
-// Embedding count when it exceeds the supported maximum, else undefined.
-const tooManyEmbeddings = computed<number | undefined>(() => {
-  const size = embeddingSize.value;
-  return size?.status === "counted" && size.count > MAX_EMBEDDINGS ? size.count : undefined;
-});
-
-// The size gate still waits: an embedding is picked but its size snapshot is missing or pending. The
-// app-level refreshEmbeddingSize fills it in once the live options know the size.
-const sizeCheckPending = computed(
-  () =>
-    app.model.data.embeddingRef !== undefined &&
-    (embeddingSize.value === undefined || embeddingSize.value.status === "pending"),
-);
-// Whether the picked embedding itself is still being computed upstream (vs. only its size check).
-const pickedEmbeddingComputing = computed(() => {
-  const ref = app.model.data.embeddingRef;
-  return ref !== undefined && findEmbeddingOption(ref)?.size.status === "pending";
-});
 
 // Set instructions to track cluster axis
 const clusterAxis = computed<AxisId>(() => {
@@ -257,23 +214,6 @@ const clusterAxis = computed<AxisId>(() => {
         </template>
       </PlDropdownRef>
 
-      <PlAlert v-if="sizeCheckPending" type="info" style="margin-top: 1rem">
-        <template v-if="pickedEmbeddingComputing">
-          <strong>The selected embedding is still being computed.</strong>
-          Run becomes available once it is ready and its size is checked.
-        </template>
-        <template v-else>
-          <strong>Checking dataset size, please wait…</strong>
-          Run becomes available once the check completes.
-        </template>
-      </PlAlert>
-
-      <PlAlert v-if="tooManyEmbeddings !== undefined" type="warn" style="margin-top: 1rem">
-        <strong>This dataset is too large for Embedding Clustering.</strong>
-        The selected embedding has {{ tooManyEmbeddings.toLocaleString() }} sequences; the block
-        does not yet support datasets above {{ MAX_EMBEDDINGS.toLocaleString() }}.
-      </PlAlert>
-
       <PlAlert v-if="app.model.outputs.inputState" type="warn" style="margin-top: 1rem">
         {{
           "Error: The input dataset you have selected is empty. \
@@ -322,7 +262,7 @@ const clusterAxis = computed<AxisId>(() => {
           label="CPU (cores)"
           :minValue="1"
           :step="1"
-          :maxValue="128"
+          :maxValue="8"
         >
           <template #tooltip> Sets the number of CPU cores to use for the clustering. </template>
         </PlNumberField>

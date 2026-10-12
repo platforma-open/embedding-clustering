@@ -31,7 +31,7 @@ const CONFIGURED: BlockData = {
   minClusterSize: 5,
   rescueNoise: false,
   mem: 128,
-  cpu: 16,
+  cpu: 8,
   tableState: createPlDataTableStateV2(),
   graphStateBubble: { title: "x", template: "bubble", currentTab: null },
   alignmentModel: {},
