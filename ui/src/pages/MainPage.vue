@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { PlMultiSequenceAlignment } from "@milaboratories/multi-sequence-alignment";
 import strings from "@milaboratories/strings";
-import { MAX_CPU } from "@platforma-open/milaboratories.embedding-clustering.model";
+import {
+  cpuError,
+  MAX_CPU,
+  MAX_MEM_GIB,
+  memError,
+} from "@platforma-open/milaboratories.embedding-clustering.model";
 import type {
   AxisId,
   PColumnIdAndSpec,
@@ -253,7 +258,8 @@ const clusterAxis = computed<AxisId>(() => {
           label="Memory (GiB)"
           :minValue="1"
           :step="1"
-          :maxValue="1012"
+          :maxValue="MAX_MEM_GIB"
+          :validate="memError"
         >
           <template #tooltip>
             Sets the amount of memory for the clustering block steps. Leave empty to size it from
@@ -267,6 +273,7 @@ const clusterAxis = computed<AxisId>(() => {
           :minValue="1"
           :step="1"
           :maxValue="MAX_CPU"
+          :validate="cpuError"
         >
           <template #tooltip> Sets the number of CPU cores to use for the clustering. </template>
         </PlNumberField>
