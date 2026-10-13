@@ -9,13 +9,13 @@ import {
 import { kind } from "@platforma-open/milaboratories.embedding-clustering.kind";
 import { blockDataModel } from "./dataModel";
 import { deriveTemplateParams } from "./templateParams";
-import { datasetKey } from "./types";
+import { datasetKey, MAX_CPU } from "./types";
 
 export type * from "@milaboratories/helpers";
 export type * from "@platforma-open/milaboratories.embedding-clustering.kind";
 
 export type { BlockData } from "./types";
-export { datasetKey, getDefaultBlockLabel } from "./types";
+export { clampCpu, datasetKey, getDefaultBlockLabel, MAX_CPU } from "./types";
 export { blockDataModel, initBlockData } from "./dataModel";
 export { deriveTemplateParams } from "./templateParams";
 
@@ -42,6 +42,15 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
       throw new Error(
         "Connect a Sequence Embeddings output and pick an embedding column to cluster by embedding distance",
       );
+    // The number fields show an error for an out-of-range or fractional value but still store it; keep Run
+    // blocked until it is fixed.
+    if (
+      data.cpu !== undefined &&
+      (!Number.isInteger(data.cpu) || data.cpu < 1 || data.cpu > MAX_CPU)
+    )
+      throw new Error(`CPU (cores) must be a whole number from 1 to ${MAX_CPU}`);
+    if (data.mem !== undefined && (!Number.isInteger(data.mem) || data.mem < 1))
+      throw new Error("Memory (GiB) must be a whole number of at least 1");
 
     // sequencesRef is auto-derived from the embedding column (for centroid/MSA display) and may be
     // empty; the embedding model is read from the column spec in the workflow, not snapshotted here.

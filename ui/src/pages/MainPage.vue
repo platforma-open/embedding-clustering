@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { PlMultiSequenceAlignment } from "@milaboratories/multi-sequence-alignment";
 import strings from "@milaboratories/strings";
+import { MAX_CPU } from "@platforma-open/milaboratories.embedding-clustering.model";
 import type {
   AxisId,
   PColumnIdAndSpec,
@@ -241,7 +242,7 @@ const clusterAxis = computed<AxisId>(() => {
           <PlTooltip class="info">
             <template #tooltip>
               After the main clustering, re-cluster the points left as noise to rescue any that form
-              their own dense groups. On by default.
+              their own dense groups. Off by default: on large datasets it can take hours.
             </template>
           </PlTooltip>
         </PlCheckbox>
@@ -254,7 +255,10 @@ const clusterAxis = computed<AxisId>(() => {
           :step="1"
           :maxValue="1012"
         >
-          <template #tooltip> Sets the amount of memory to use for the clustering. </template>
+          <template #tooltip>
+            Sets the amount of memory for the clustering block steps. Leave empty to size it from
+            the input.
+          </template>
         </PlNumberField>
 
         <PlNumberField
@@ -262,7 +266,7 @@ const clusterAxis = computed<AxisId>(() => {
           label="CPU (cores)"
           :minValue="1"
           :step="1"
-          :maxValue="8"
+          :maxValue="MAX_CPU"
         >
           <template #tooltip> Sets the number of CPU cores to use for the clustering. </template>
         </PlNumberField>

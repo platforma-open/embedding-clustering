@@ -32,6 +32,15 @@ export type BlockData = {
 // Fingerprint of a dataset selection. Stamped onto the `embeddingOptions` output so the UI can tell a
 // list still computed for the PREVIOUS dataset (outputs lag a few seconds behind a switch) from the
 // current one, and never offer another dataset's embeddings.
+// Most CPU cores the clustering step uses: its parallel phases stop speeding up beyond 8. The UI field is
+// capped at this, and values from templates or projects saved before the cap are clamped to it.
+export const MAX_CPU = 8;
+
+// A cpu setting clamped to MAX_CPU (undefined stays undefined: the workflow default applies).
+export function clampCpu(cpu: number | undefined): number | undefined {
+  return cpu === undefined ? undefined : Math.min(cpu, MAX_CPU);
+}
+
 export function datasetKey(ref: PlRef | undefined): string {
   return JSON.stringify(ref ? [ref.blockId, ref.name] : null);
 }

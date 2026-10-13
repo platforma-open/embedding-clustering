@@ -29,7 +29,7 @@ const CONFIGURED: BlockData = {
   embeddingRef: { __isRef: true, blockId: "b2", name: "pf/embedding" },
   sequencesRef: ANCHORED_IDS,
   minClusterSize: 5,
-  rescueNoise: false,
+  rescueNoise: true,
   mem: 128,
   cpu: 8,
   tableState: createPlDataTableStateV2(),
@@ -79,7 +79,7 @@ describe("export -> apply", () => {
     const fresh = initBlockData(undefined);
 
     expect(fresh.minClusterSize).toBe(2);
-    expect(fresh.rescueNoise).toBe(true);
+    expect(fresh.rescueNoise).toBe(false);
     expect(fresh.sequencesRef).toEqual([]);
     expect(fresh.customBlockLabel).toBe("");
     expect(fresh.datasetRef).toBeUndefined();

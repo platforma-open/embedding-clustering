@@ -3,9 +3,8 @@ self := import("@platforma-sdk/workflow-tengo:tpl")
 exec := import("@platforma-sdk/workflow-tengo:exec")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 
-math := import("math")
 
-// exec.formula builders — used to scale the clustering exec's RAM by the input parquet size.
+// exec.formula builders — size the clustering and results execs' RAM from their input files.
 f := exec.formula
 
 embeddingClusteringSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:embedding-clustering")
@@ -48,7 +47,7 @@ self.body(func(inputs) {
 		minSamples = minClusterSize
 	}
 	// Optional noise re-clustering: re-cluster the HDBSCAN noise pile to rescue dense sub-groups.
-	rescueNoise := is_undefined(inputs.rescueNoise) ? true : inputs.rescueNoise
+	rescueNoise := is_undefined(inputs.rescueNoise) ? false : inputs.rescueNoise
 
 	baseMemGiB := 32
 	if !is_undefined(inputs.mem) {
@@ -95,8 +94,8 @@ self.body(func(inputs) {
 			isEmpty: true
 		}
 	} else {
-		// 8 cores: the clustering's parallel phases stop speeding up beyond 8, and the software pins 8 numba
-		// threads (a fixed thread count keeps results reproducible).
+		// 8 cores by default: the clustering's parallel phases stop speeding up beyond 8, and the model blocks a
+		// larger setting.
 		cpu := 8
 		if !is_undefined(inputs.cpu) {
 			cpu = inputs.cpu
@@ -109,6 +108,7 @@ self.body(func(inputs) {
 		// (clonotype -> representative) and a headered
 		// centroid_distances.tsv (per-representative cosine distance to the medoid).
 		embClustBuilder := exec.builder().
+			name("embedding-clustering").
 			software(embeddingClusteringSw).
 			printErrStreamToStdout().
 			addFile("embedding.parquet", inputs.embeddingMatrix, { tag: "input" }).
@@ -117,7 +117,8 @@ self.body(func(inputs) {
 			arg("--dim-col").arg(inputs.dimCol).
 			arg("--value-col").arg(inputs.valueCol).
 			arg("--min-cluster-size").arg(string(minClusterSize)).
-			arg("--min-samples").arg(string(minSamples))
+			arg("--min-samples").arg(string(minSamples)).
+			arg("--threads").argExpr("{system.cpu}")
 
 		// Resources: an explicit `mem` (Advanced Settings) is honored verbatim; otherwise RAM scales
 		// with the input parquet size (f.size). Streaming + IncrementalPCA decouples RAM from input
@@ -162,15 +163,33 @@ self.body(func(inputs) {
 
 		// Step 2: aggregate. Expand reps -> members via dedup_mapping; --distances uses the precomputed
 		// cosine distances (no Levenshtein, no 1.0 cap).
-		result := exec.builder().
+		resultBuilder := exec.builder().
+			name("embedding-clustering-results").
 			software(processResultsSw).
-			mem(string(int(math.max(32, baseMemGiB / 2))) + "GiB").
-			cpu(8).
 			addFile("clusters.tsv", clusters).
-			addFile("cloneTable.tsv", cloneTable).
-			addFile("dedup_mapping.tsv", dedupMapping).
+			addFile("cloneTable.tsv", cloneTable, { tag: "table" }).
+			addFile("dedup_mapping.tsv", dedupMapping, { tag: "mapping" }).
 			addFile("centroid_distances.tsv", centroidDistances).
-			arg("--distances").arg("centroid_distances.tsv").
+			arg("--distances").arg("centroid_distances.tsv")
+			
+		// RAM: an explicit `mem` (Advanced Settings) is honored verbatim, as for the clustering step; otherwise it
+		// scales with the clonotype count
+		// (dedup_mapping.tsv, one row per clonotype) and the sample rows (cloneTable.tsv, one row per sample and
+		// clonotype). Measured peak ~ 15.5x mapping + 4x table (1.77M real and 10M synthetic clonotypes,
+		// 1-10 samples per clonotype), so about twice that: 32x mapping + 8x table + 8 GiB.
+		if !is_undefined(inputs.mem) {
+			resultBuilder = resultBuilder.resources({
+				onCPU: { cpu: 8, ram: string(baseMemGiB) + "GiB" }
+			})
+		} else {
+			resultBuilder = resultBuilder.resources({
+				onCPU: {
+					cpu: 8,
+					ram: f.size("mapping").times(32).plus(f.size("table").times(8)).plus(f.gib(8)).between(f.gib(16), f.gib(256)).staticFallback(f.gib(64))
+				}
+			})
+		}
+		result := resultBuilder.
 			saveFile("abundances.tsv").
 			saveFile("cluster-to-seq.tsv").
 			saveFile("clone-to-cluster.tsv").
