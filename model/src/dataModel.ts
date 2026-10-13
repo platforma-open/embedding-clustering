@@ -28,7 +28,7 @@ export function initBlockData(params: BlockParams | undefined): BlockData {
     embeddingRef: params?.embeddingRef,
     sequencesRef: params?.sequencesRef ?? [],
     minClusterSize: params?.minClusterSize ?? 2, // HDBSCAN; fixed small default, not scaled with N
-    rescueNoise: params?.rescueNoise ?? false,
+    rescueNoise: params?.rescueNoise ?? true,
     mem: params?.mem,
     cpu: clampCpu(params?.cpu), // a template may carry more than MAX_CPU
     tableState: createPlDataTableStateV2(),
@@ -64,11 +64,5 @@ export function initBlockData(params: BlockParams | undefined): BlockData {
 export const blockDataModel = new DataModelBuilder({ kind })
   .from<BlockData>("v1")
   // v2: the clustering step uses at most MAX_CPU cores; clamp a larger cpu saved by an earlier version.
-  // Noise rescue is now off by default; a project saved before the toggle existed has no rescueNoise and
-  // always ran with it on, so it keeps it on.
-  .migrate<BlockData>("v2", (v1) => ({
-    ...v1,
-    cpu: clampCpu(v1.cpu),
-    rescueNoise: v1.rescueNoise ?? true,
-  }))
+  .migrate<BlockData>("v2", (v1) => ({ ...v1, cpu: clampCpu(v1.cpu) }))
   .init(({ params }) => initBlockData(params));

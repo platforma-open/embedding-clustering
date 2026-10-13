@@ -247,7 +247,7 @@ const clusterAxis = computed<AxisId>(() => {
           <PlTooltip class="info">
             <template #tooltip>
               After the main clustering, re-cluster the points left as noise to rescue any that form
-              their own dense groups. Off by default: on large datasets it can take hours.
+              their own dense groups. On by default.
             </template>
           </PlTooltip>
         </PlCheckbox>

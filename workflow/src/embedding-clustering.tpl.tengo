@@ -47,7 +47,7 @@ self.body(func(inputs) {
 		minSamples = minClusterSize
 	}
 	// Optional noise re-clustering: re-cluster the HDBSCAN noise pile to rescue dense sub-groups.
-	rescueNoise := is_undefined(inputs.rescueNoise) ? false : inputs.rescueNoise
+	rescueNoise := is_undefined(inputs.rescueNoise) ? true : inputs.rescueNoise
 
 	baseMemGiB := 32
 	if !is_undefined(inputs.mem) {

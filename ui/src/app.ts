@@ -12,7 +12,7 @@ import MainPage from "./pages/MainPage.vue";
 export const sdkPlugin = defineAppV3(platforma, (app) => {
   app.model.data.customBlockLabel ??= "";
   // Default-guard for projects saved before the noise-rescue toggle existed (ON by default).
-  app.model.data.rescueNoise ??= false;
+  app.model.data.rescueNoise ??= true;
 
   syncDefaultBlockLabel(app.model);
   reconcileEmbeddingSelection(app.model);
