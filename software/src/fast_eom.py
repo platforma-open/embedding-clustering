@@ -11,7 +11,9 @@ PR #714, merged 2026-05-27, released in 0.8.44): build the parent -> children lo
 no recursion), and when a node is kept, walk its subtree breadth-first unselecting everything below it
 (_bfs_from_dict). The keep-or-split rule itself is fast_hdbscan's (stability clamped at 0, optional
 max_cluster_size); the lookup is a CSR array index instead of a Python dict of lists so numba can compile it.
-Labels and membership probabilities are identical to fast_hdbscan's own clusters_from_spanning_tree.
+Labels and membership probabilities are identical to fast_hdbscan's own clusters_from_spanning_tree, except when a
+max_cluster_size cap leaves exactly one non-root cluster selected: fast_hdbscan raises there, cluster_labels labels
+that cluster 0 and the rest noise.
 
 cluster_labels(mst, min_cluster_size, max_cluster_size) is fast_hdbscan.hdbscan.clusters_from_spanning_tree for the
 settings this block uses (eom, no epsilon, no persistence, no sample weights) with that selection swapped in.
@@ -100,7 +102,9 @@ def extract_eom_clusters(condensed_tree, cluster_tree, max_cluster_size=np.inf, 
 def cluster_labels(minimum_spanning_tree, min_cluster_size, max_cluster_size=np.inf):
     """HDBSCAN labels (-1 = noise) and membership probabilities from a mutual-reachability MST.
     max_cluster_size: fast_hdbscan's EOM size cap -- a group larger than this is never selected; EOM uses its
-    sub-groups instead, and a group with no sub-groups (a leaf) larger than the cap becomes noise."""
+    sub-groups instead, and a group with no sub-groups (a leaf) larger than the cap becomes noise. Unlike
+    fast_hdbscan's own clusters_from_spanning_tree, a cap that leaves exactly one cluster selected does not
+    raise (see the placeholder below)."""
     n_points = minimum_spanning_tree.shape[0] + 1
     # sort the spanning-tree edges by distance (ties broken by the two point IDs)
     sorted_mst = minimum_spanning_tree[np.lexsort((minimum_spanning_tree.T[1], minimum_spanning_tree.T[0],
@@ -114,6 +118,15 @@ def cluster_labels(minimum_spanning_tree, min_cluster_size, max_cluster_size=np.
     # choose which groups become final clusters. This is the only step of fast_hdbscan that we have MODIFIED
     # Following the contrib HDBSCAN approach to avoid OOM issues
     selected = extract_eom_clusters(condensed_tree, cluster_tree, float(max_cluster_size), False)
+    if len(selected) == 1 and len(condensed_tree.parent) > 0 and selected[0] != condensed_tree.parent.min():
+        # fast_hdbscan's get_cluster_label_vector treats a single selected cluster as the root (the only way one
+        # cluster can be selected without a size cap) and raises KeyError for the points that fall back to the
+        # root. With a cap, one non-root cluster can be selected while larger groups are rejected. A placeholder
+        # id above every node takes the general path instead: the real cluster keeps label 0 (ids are labelled
+        # in sorted order) and the points outside it become noise. No node carries the placeholder, so no point
+        # is ever assigned to it.
+        placeholder = max(condensed_tree.parent.max(), condensed_tree.child.max()) + 1
+        selected = np.append(selected, np.int64(placeholder))
     # give each point its cluster number, or −1 for noise
     labels = get_cluster_label_vector(condensed_tree, selected, 0.0, n_samples=n_points)
     # membership probability per point

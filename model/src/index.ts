@@ -9,13 +9,21 @@ import {
 import { kind } from "@platforma-open/milaboratories.embedding-clustering.kind";
 import { blockDataModel } from "./dataModel";
 import { deriveTemplateParams } from "./templateParams";
-import { datasetKey } from "./types";
+import { cpuError, datasetKey, memError } from "./types";
 
 export type * from "@milaboratories/helpers";
 export type * from "@platforma-open/milaboratories.embedding-clustering.kind";
 
 export type { BlockData } from "./types";
-export { datasetKey, getDefaultBlockLabel } from "./types";
+export {
+  clampCpu,
+  cpuError,
+  datasetKey,
+  getDefaultBlockLabel,
+  MAX_CPU,
+  MAX_MEM_GIB,
+  memError,
+} from "./types";
 export { blockDataModel, initBlockData } from "./dataModel";
 export { deriveTemplateParams } from "./templateParams";
 
@@ -42,6 +50,11 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
       throw new Error(
         "Connect a Sequence Embeddings output and pick an embedding column to cluster by embedding distance",
       );
+    // The number fields show these errors but still store the value; keep Run blocked until it is fixed.
+    const cpuMsg = cpuError(data.cpu);
+    if (cpuMsg) throw new Error(`CPU (cores): ${cpuMsg}`);
+    const memMsg = memError(data.mem);
+    if (memMsg) throw new Error(`Memory (GiB): ${memMsg}`);
 
     // sequencesRef is auto-derived from the embedding column (for centroid/MSA display) and may be
     // empty; the embedding model is read from the column spec in the workflow, not snapshotted here.

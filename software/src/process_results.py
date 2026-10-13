@@ -14,20 +14,25 @@ abundancesTsv = "abundances.tsv"
 abundancesPerClusterTsv = "abundances-per-cluster.tsv"
 clusterRadiusTsv = "cluster-radius.tsv"
 
-# sampleId, clonotypeKey, clonotypeKeyLabel, sequence_..., abundance
-cloneTable = pl.read_csv(cloneTableTsv, separator="\t")
+# sampleId, clonotypeKey, clonotypeKeyLabel, sequence_..., abundance -- one row per (sample, clonotype).
+# Scanned lazily: each section below reads only the columns it needs, so sampleId and abundance are never held
+# alongside the sequences, and the per-sample abundance join is streamed.
+clone_scan = pl.scan_csv(cloneTableTsv, separator="\t")
 
 # Get all centroid sequence columns if we have them (shown next to each cluster in the table).
-sequence_cols = [col for col in cloneTable.columns
+sequence_cols = [col for col in clone_scan.collect_schema().names()
                  if col.startswith('sequence_')]
 if not sequence_cols:
     print("Warning: No sequence columns (e.g., 'sequence_0') found.")
 
+# One row per clonotype: its original label, its sequences and its "CL-" label.
 # Transform clonotypeKeyLabel from "C-XXXXXX" (clonotype, MiXCR-side) or "P-XXXXXX"
 # (peptide, peptide-extraction-side) into "CL-XXXXXX"
-cloneTable = cloneTable.with_columns(
+clonotypes = clone_scan.select(
+    ['clonotypeKey', 'clonotypeKeyLabel'] + sequence_cols
+).unique(subset=['clonotypeKey'], keep='first').with_columns(
     pl.col('clonotypeKeyLabel').str.replace(r'^[CP]-', 'CL-').alias('clusterLabel')
-)
+).collect()
 
 # clusterId, clonotypeKey (both are representative keys). Keys carry no prefix, so no stripping here.
 clusters = pl.read_csv(clustersTsv, separator="\t", has_header=False,
@@ -43,18 +48,21 @@ dedup_mapping = pl.read_csv(dedupMappingTsv, separator="\t")
 # Clonotypes absent from the embedding matrix (e.g. sparse Fv/scFv coverage -- a clonotype without a
 # complete chain pair) never reach clustering, so they carry no cluster and are naturally excluded
 # from every output below (all of which derive from `clusters`). Report the drop count for the run log.
-embedded_keys = set(dedup_mapping.get_column("clonotypeKey").to_list())
-n_excluded = cloneTable.filter(~pl.col("clonotypeKey").is_in(embedded_keys)).height
+n_excluded = clone_scan.select('clonotypeKey').join(
+    dedup_mapping.lazy().select('clonotypeKey'), on='clonotypeKey', how='anti'
+).select(pl.len()).collect(engine="streaming").item()
 if n_excluded:
     print(f"{n_excluded} clonotype(s) excluded from clustering -- no embedding "
           f"vector in the selected column (e.g. sparse Fv/scFv coverage).")
 
 num_representatives = clusters.select(pl.col("clonotypeKey").n_unique()).item()
+# representativeKey is kept: it is what the medoid distances are keyed on.
 clusters = clusters.rename({"clonotypeKey": "representativeKey"}).join(
     dedup_mapping,
     on="representativeKey",
     how="inner"
-).drop("representativeKey")
+)
+del dedup_mapping
 print(f"Expanded clusters: {num_representatives} representatives -> {clusters.height} total clonotype-cluster assignments")
 
 # --- Calculate cluster sizes directly in the clusters dataframe ---
@@ -62,61 +70,21 @@ clusters = clusters.with_columns(
     pl.col('clonotypeKey').count().over('clusterId').alias('size')
 )
 
-# Merge clusters with cloneTable to get clusterLabel for the centroid
+# Merge clusters with the clonotypes to get clusterLabel for the centroid
 # This 'clusterLabel' is the transformed "CL-XXXX" label of the centroid.
-labelsTable_for_join = cloneTable.select(
-    pl.col('clonotypeKey').alias('clusterId'), # Alias to 'clusterId' to match the left table's key name
-    'clusterLabel' # The "CL-XXXX" label associated with this key in cloneTable
-).unique(subset=['clusterId'], keep='first') # Unique on the new 'clusterId' column
-
 clusters = clusters.join(
-    labelsTable_for_join,
-    on='clusterId', # Join on 'clusterId', present in both DataFrames with the same meaning
+    clonotypes.select(pl.col('clonotypeKey').alias('clusterId'), 'clusterLabel'),
+    on='clusterId',
     how='left'
 )
 
 # --- Generate cluster-to-seq.tsv ---
-# Prepare the right DataFrame for the join, ensuring 'clusterId' and 'size' are treated as payload.
-# The 'clusterLabel' here is the centroid's transformed label.
-# We also need the centroid's sequence columns for this file.
-
-# First, ensure 'clusters' has 'clusterLabel' (it should from the join above)
-# Then, get sequence columns from the centroid.
-# Centroid's key is 'clusterId' in the 'clusters' table.
-# We need to join 'clusters' with 'cloneTable' (where 'clonotypeKey' is centroid's key)
-# to fetch the sequence_cols for the centroid.
-
-# Select sequence columns and 'clonotypeKey' from cloneTable for centroids
-centroid_sequences_for_cts = cloneTable.select(
-    [pl.col('clonotypeKey').alias("centroid_key_cts")] + sequence_cols
-).unique("centroid_key_cts", keep="first")
-
-# Join clusters with centroid_sequences_for_cts
-# 'clusters' has: clusterId (centroid key), clonotypeKey (member key), size, clusterLabel (centroid's CL-label)
-temp_cluster_to_seq_data = clusters.join(
-    centroid_sequences_for_cts,
-    left_on="clusterId",
-    right_on="centroid_key_cts",
-    how="left" # Keep all clusters
-)
-
+# One row per cluster: its centroid's label, the cluster size, and the centroid's sequence columns.
 required_cols_cts = ['clusterId', 'clusterLabel', 'size'] + sequence_cols
-# Select necessary columns. The sequence_cols will be from the centroid.
-# We need to ensure we pick one row per clusterId.
-# The join above might create multiple rows if a clusterId appeared multiple times in clusters
-# (e.g. if clusters wasn't unique by clusterId before, though size calculation implies it's grouped by clusterId)
-# However, the goal is one centroid sequence per cluster.
-# The 'clusters' table after size calculation effectively lists members and their clusterId.
-# For cluster-to-seq, we need one entry per clusterId, with its centroid's details.
-
-# Let's use the 'clusterId' (centroid key) and its 'clusterLabel' and 'size' from the 'clusters' table,
-# then join to get the centroid's sequences from 'cloneTable'.
-# Create a base for cluster_to_seq from unique clusterIds and their already determined labels/sizes.
-# Note: 'clusters' contains member clonotypeKeys. We need unique clusterIds.
 unique_clusters_info = clusters.select(["clusterId", "clusterLabel", "size"]).unique(subset=["clusterId"], keep="first")
 
 cluster_to_seq_df = unique_clusters_info.join(
-    centroid_sequences_for_cts, # Contains centroid_key_cts and its sequence_cols
+    clonotypes.select([pl.col('clonotypeKey').alias("centroid_key_cts")] + sequence_cols),
     left_on="clusterId",
     right_on="centroid_key_cts",
     how="left"
@@ -124,30 +92,28 @@ cluster_to_seq_df = unique_clusters_info.join(
 
 cluster_to_seq = cluster_to_seq_df.select(required_cols_cts)
 cluster_to_seq.write_csv(clusterToSeqTsv, separator="\t")
+del unique_clusters_info, cluster_to_seq_df
 
 
 # --- Generate clone-to-cluster.tsv ---
 # 'clusters' should have: clusterId (centroid key), clonotypeKey (member key), clusterLabel (centroid's CL-label)
-clone_to_cluster = clusters.select(['clusterId',
-                                    'clonotypeKey',
-                                    'clusterLabel']
-                                   ).with_columns(pl.lit(1).alias('link'))
-clone_to_cluster.write_csv(cloneToClusterTsv, separator="\t")
+clusters.select(['clusterId', 'clonotypeKey', 'clusterLabel']).with_columns(
+    pl.lit(1).alias('link')
+).write_csv(cloneToClusterTsv, separator="\t")
 
 
 # --- Generate abundances.tsv ---
-# Merge cloneTable and clusters to link abundances to clusters
-# We need 'clusterId' from the 'clusters' table.
-merged_abundances = cloneTable.select(['sampleId', 'clonotypeKey', 'abundance']).join(
-    clusters.select(['clusterId', 'clonotypeKey']).unique(subset=["clonotypeKey"], keep="first"), # Ensure one cluster per clonotypeKey
-    left_on='clonotypeKey', 
-    right_on='clonotypeKey', 
+# Link each (sample, clonotype) abundance to its cluster and sum per (sample, cluster), streaming
+# over cloneTable rather than materializing the per-sample join.
+member_cluster = clusters.select(['clusterId', 'clonotypeKey']).unique(subset=["clonotypeKey"], keep="first") # Ensure one cluster per clonotypeKey
+cluster_abundances = clone_scan.select(['sampleId', 'clonotypeKey', 'abundance']).join(
+    member_cluster.lazy(),
+    on='clonotypeKey',
     how='inner'
-)
-
-cluster_abundances = merged_abundances.group_by(['sampleId', 'clusterId']).agg(
+).group_by(['sampleId', 'clusterId']).agg(
     pl.sum('abundance').alias('abundance')
-)
+).collect(engine="streaming")
+del member_cluster
 
 cluster_abundances = cluster_abundances.with_columns(
     pl.sum('abundance').over('sampleId').alias('total_sample_abundance')
@@ -179,50 +145,25 @@ top_cluster_ids_df = abundances_per_cluster.sort(
     'abundance_per_cluster', descending=True
 ).head(100).select('clusterId')
 
-# --- Generate distance_to_centroid.tsv (New Segmented Approach) ---
-
-# Base DataFrame: member's key and original label
-# 'clonotypeKey' is the member's key.
-# 'clonotypeKeyLabel' is the member's original label (e.g., "C-YYYY").
-# 'clusterId' is the centroid's key.
-# 'clusterLabel' is the centroid's transformed label (e.g., "CL-XXXX"), already in 'clusters' table.
-
-# Start with the member-to-centroid assignments from the 'clusters' table.
-# 'clusters' has: clonotypeKey (member), clusterId (centroid), size, clusterLabel (centroid's CL-label).
-distance_df_base = clusters.select([
-    pl.col("clonotypeKey"),             # Member's key
-    pl.col("clusterId"),               # Centroid's key
-    pl.col("clusterLabel")             # Centroid's transformed "CL-" label
-])
-
-# Add member's original 'clonotypeKeyLabel'
-member_original_labels = cloneTable.select([
-    pl.col("clonotypeKey").alias("member_key_for_label_join"),
-    pl.col("clonotypeKeyLabel")        # Member's original "C-" label
-]).unique("member_key_for_label_join", keep="first")
-
-distance_df = distance_df_base.join(
-    member_original_labels,
-    left_on="clonotypeKey",
-    right_on="member_key_for_label_join",
-    how="left" # Should always find a match if clonotypeKey comes from cloneTable initially
-)
-
-
-# Use precomputed cosine distances to the cluster medoid (one row per representativeKey, incl. noise
-# singletons at 0), expanded to all clonotypes via dedup_mapping. Cosine distance ranges 0-2 (no cap).
+# --- Generate distance_to_centroid.tsv ---
+# Per member: its cluster, the centroid's "CL-" label, its own original "C-" label, and the
+# precomputed cosine distance of its representative to the cluster medoid (one row per
+# representativeKey, incl. noise singletons at 0). Cosine distance ranges 0-2 (no cap).
 centroid_distances = pl.read_csv(args.distances, separator="\t")  # headered: representativeKey, distance
-member_dist = dedup_mapping.join(
-    centroid_distances, on="representativeKey", how="inner"
-).select(["clonotypeKey", "distance"])
-distance_df = distance_df.join(member_dist, on="clonotypeKey", how="left").with_columns(
+
+distance_df = clusters.select(
+    ["clonotypeKey", "clusterId", "clusterLabel", "representativeKey"]
+).join(
+    clonotypes.select(["clonotypeKey", "clonotypeKeyLabel"]),
+    on="clonotypeKey",
+    how="left"
+).join(
+    centroid_distances, on="representativeKey", how="left"
+).with_columns(
     pl.col("distance").fill_null(0.0).alias("distanceToCentroid")
-).drop("distance")
+)
+del clusters, clonotypes, centroid_distances
 
-
-# Select final columns for the output TSV
-# Ensure all these columns exist in distance_df at this point
-# clonotypeKey, clusterId, clusterLabel, clonotypeKeyLabel, distanceToCentroid
 output_columns = [
     "clonotypeKey",        # Member's key
     "clusterId",           # Centroid's key
@@ -230,15 +171,10 @@ output_columns = [
     "clusterLabel",        # Centroid's transformed "CL-" label
     "distanceToCentroid"
 ]
-# Reorder/select columns if necessary, ensuring they exist
-# If any are missing (e.g. if clonotypeKeyLabel was not joined correctly), this would error.
-# The construction of distance_df above should ensure these are present.
-distance_df_to_write = distance_df.select(output_columns)
-
-
 # Drop duplicate rows based on clonotypeKey (member's key), keeping the first occurrence.
 # This ensures one distance entry per member clonotype.
-distance_df_to_write = distance_df_to_write.unique(subset=["clonotypeKey"], keep="first")
+distance_df_to_write = distance_df.select(output_columns).unique(subset=["clonotypeKey"], keep="first")
+del distance_df
 
 # Output to TSV
 output_distance_tsv = "distance_to_centroid.tsv"
