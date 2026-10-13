@@ -10,12 +10,12 @@ slices := import("@platforma-sdk/workflow-tengo:slices")
 render := import("@platforma-sdk/workflow-tengo:render")
 pSpec := import("@platforma-sdk/workflow-tengo:pframes.spec")
 ll := import("@platforma-sdk/workflow-tengo:ll")
+anonymize := import("@platforma-sdk/workflow-tengo:anonymize")
 
 text := import("text")
 math := import("math")
 
 emptyCheckTpl := assets.importTemplate(":empty-check")
-deanonimizationTpl := assets.importTemplate(":deanonimization")
 anonymizationTpl := assets.importTemplate(":anonymization")
 embeddingClusteringTpl := assets.importTemplate(":embedding-clustering")
 
@@ -97,8 +97,22 @@ wf.body(func(args) {
 	embSpec := embeddingCol.spec
 	// model provenance from the embedding column's spec (stamped on outputs)
 	embeddingModel := embSpec.domain["pl7.app/embedding/model"]
-	// long-format Parquet matrix; headers are the embedding column's own axis/value labels
-	embeddingMatrix := xsv.exportFrame([embeddingCol], "parquet", {
+	// Long-format Parquet matrix (clonotypeKey, embeddingDim, embedding). The spec is reduced to names, types and
+	// the labels used as headers, so the export changes only when the data does.
+	strippedAxis := func(axis, header) {
+		return { name: axis.name, type: axis.type, annotations: { "pl7.app/label": header } }
+	}
+	strippedEmbSpec := {
+		kind: "PColumn",
+		name: embSpec.name,
+		valueType: embSpec.valueType,
+		annotations: { "pl7.app/label": "embedding" },
+		axesSpec: [
+			strippedAxis(embSpec.axesSpec[0], "clonotypeKey"),
+			strippedAxis(embSpec.axesSpec[1], "embeddingDim")
+		]
+	}
+	embeddingMatrix := xsv.exportFrame([{ spec: strippedEmbSpec, data: embeddingCol.data }], "parquet", {
 		mem: string(int(math.max(16, baseMemGiB / 4))) + "GiB",
 		cpu: 4
 	})
@@ -151,10 +165,10 @@ wf.body(func(args) {
 		embeddingMatrix: embeddingMatrix,
 		isSingleCell: isSingleCell,
 		sequencesRef: sequencesRef,
-		// matrix headers are the embedding column's own axis/value pl7.app/label values
-		keyCol: embSpec.axesSpec[0].annotations["pl7.app/label"],
-		dimCol: embSpec.axesSpec[1].annotations["pl7.app/label"],
-		valueCol: embSpec.annotations["pl7.app/label"],
+		// the matrix headers set by strippedEmbSpec above
+		keyCol: "clonotypeKey",
+		dimCol: "embeddingDim",
+		valueCol: "embedding",
 		// embedding vector length D from the column spec (undefined for unmapped models -> loader infers)
 		dims: embSpec.annotations["pl7.app/embedding/length"],
 		minClusterSize: args.minClusterSize,
@@ -216,19 +230,22 @@ wf.body(func(args) {
 		abundanceUnit = "molecules"
 	}
 
-	// De-anonymize TSV files that contain sampleId
-	// Run deanonymization as ephemeral to avoid cross-project deduplication while keeping
-	// clustering computation cached. This ensures mapping is applied per project.
-	abundancesDeanonimization := render.createEphemeral(
-		deanonimizationTpl,
-		{
-			mapping: mappingRef,
-			clusteringResult: clusteringAnalysis.output("abundances")
+	// The per-sample results carry the anonymized sample ids the clustering saw. They are imported as they are
+	// (sampleId is the partition key) and the project's sample ids are restored by renaming the partition keys
+	deanonymizeSampleKeys := func(pf) {
+		data := {}
+		for k in maps.getKeys(pf) {
+			data[k] = pf[k].data
 		}
-	)
-	deanonimizedAbundancesTsv := abundancesDeanonimization.output("deanonimizedTsv")
+		renamed := anonymize.deanonymizePKeys(data, 0, [0], mappingRef)
+		result := {}
+		for k in maps.getKeys(pf) {
+			result[k] = { spec: pf[k].spec, data: renamed[k] }
+		}
+		return result
+	}
 
-	abundancesPf := xsv.importFile(deanonimizedAbundancesTsv, "tsv", {
+	abundancesPf := xsv.importFile(clusteringAnalysis.output("abundances"), "tsv", {
 		axes: [{
 			column: "sampleId",
 			spec: abundanceSpec.axesSpec[0]
@@ -254,6 +271,7 @@ wf.body(func(args) {
 		storageFormat: "Parquet",
 		partitionKeyLength: 1
 	}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
+	abundancesPf = deanonymizeSampleKeys(abundancesPf)
 
 	abundancesPerClusterPf := xsv.importFile(clusteringAnalysis.output("abundancesPerCluster"), "tsv", {
 		axes: [{
@@ -472,17 +490,7 @@ wf.body(func(args) {
 	opf = opf.build()
 
 	// Generate pFrames for bubble plot with top clusters
-	// De-anonymize abundances-top.tsv
-	abundancesTopDeanonimization := render.createEphemeral(
-		deanonimizationTpl,
-		{
-			mapping: mappingRef,
-			clusteringResult: clusteringAnalysis.output("abundancesTop")
-		}
-	)
-	deanonimizedAbundancesTopTsv := abundancesTopDeanonimization.output("deanonimizedTsv")
-
-	abundancesTopPf := xsv.importFile(deanonimizedAbundancesTopTsv, "tsv", {
+	abundancesTopPf := xsv.importFile(clusteringAnalysis.output("abundancesTop"), "tsv", {
 			axes: [{
 				column: "sampleId",
 				spec: abundanceSpec.axesSpec[0]
@@ -513,6 +521,7 @@ wf.body(func(args) {
 			storageFormat: "Parquet",
 			partitionKeyLength: 1
 		}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
+	abundancesTopPf = deanonymizeSampleKeys(abundancesTopPf)
 
 	clusterToSeqTopPf := xsv.importFile(clusteringAnalysis.output("clusterToSeqTop"), "tsv", {
 		axes: [{
@@ -561,7 +570,8 @@ wf.body(func(args) {
 	msaPf := pframes.pFrameBuilder()
 	i := 0
 	for pf in [cloneToClusterLinkPf, distancesPf] {
-		for k, v in pf {
+		for k in maps.getKeys(pf) {
+			v := pf[k]
 			msaPf.add(k + string(i), trace.inject(v.spec), v.data)
 			i = i + 1
 		}
@@ -571,7 +581,8 @@ wf.body(func(args) {
 	epf := pframes.pFrameBuilder()
 	i = 0
 	for pf in [abundancesPf, cloneToClusterPf, cloneToClusterLinkPf, clusterToSeqPf, abundancesPerClusterPf, distancesPf, clusterRadiusPf] {
-		for k, v in pf {
+		for k in maps.getKeys(pf) {
+			v := pf[k]
 			epf.add(k + string(i), trace.inject(v.spec), v.data) // label, specs, data
 			i = i + 1
 		}
