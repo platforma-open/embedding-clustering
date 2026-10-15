@@ -10,6 +10,8 @@ export type BlockData = {
   defaultBlockLabel: string;
   customBlockLabel: string;
   datasetRef?: PlRef;
+  // Subset column picked with the dataset in PlDatasetSelector (e.g. a Repertoire Labeling label).
+  filterRef?: PlRef;
   // Auto-derived from the selected embedding column (source sequence column(s) for centroid/MSA
   // display). The user never picks this directly in embedding clustering.
   sequencesRef: SUniversalPColumnId[];

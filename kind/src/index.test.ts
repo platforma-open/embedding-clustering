@@ -21,7 +21,7 @@ const LOCAL_ID = '{"name":"pl7.app/vdj/sequence","resolvePath":["a","b"]}';
 const FILTERED_ID = `{"__isFiltered":true,"axisFilters":[[0,"IGH"]],"source":${JSON.stringify(GLOBAL_ID)}}`;
 const OVERRIDDEN_ID = `{"__isOverridden":true,"source":${JSON.stringify(GLOBAL_ID)},"specOverrides":{"annotations":{"pl7.app/label":"x"}}}`;
 
-describe.each(["datasetRef", "embeddingRef"] as const)("%s", (field) => {
+describe.each(["datasetRef", "filterRef", "embeddingRef"] as const)("%s", (field) => {
   it("accepts a PlRef", () => {
     expect(parse({ [field]: REF })).toEqual({ [field]: REF });
   });

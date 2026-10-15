@@ -17,6 +17,7 @@ import type { BlockData } from "./types";
 export function deriveTemplateParams(data: BlockData): BlockParams {
   return {
     datasetRef: data.datasetRef,
+    filterRef: data.filterRef,
     embeddingRef: data.embeddingRef,
     sequencesRef: data.sequencesRef,
     minClusterSize: data.minClusterSize,
