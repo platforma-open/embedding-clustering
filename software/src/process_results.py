@@ -26,12 +26,12 @@ if not sequence_cols:
     print("Warning: No sequence columns (e.g., 'sequence_0') found.")
 
 # One row per clonotype: its original label, its sequences and its "CL-" label.
-# Transform clonotypeKeyLabel from "C-XXXXXX" (clonotype, MiXCR-side) or "P-XXXXXX"
-# (peptide, peptide-extraction-side) into "CL-XXXXXX"
+# Transform clonotypeKeyLabel from "C-XXXXXX" (clonotype, MiXCR-side), "P-XXXXXX"
+# (peptide, peptide-extraction-side) or "V-XXXXXX" (variant, Amplicon Profiling-side) into "CL-XXXXXX"
 clonotypes = clone_scan.select(
     ['clonotypeKey', 'clonotypeKeyLabel'] + sequence_cols
 ).unique(subset=['clonotypeKey'], keep='first').with_columns(
-    pl.col('clonotypeKeyLabel').str.replace(r'^[CP]-', 'CL-').alias('clusterLabel')
+    pl.col('clonotypeKeyLabel').str.replace(r'^[CPV]-', 'CL-').alias('clusterLabel')
 ).collect()
 
 # clusterId, clonotypeKey (both are representative keys). Keys carry no prefix, so no stripping here.
