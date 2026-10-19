@@ -1,6 +1,6 @@
 import {
-  datasetKey,
   getDefaultBlockLabel,
+  selectionKey,
   platforma,
 } from "@platforma-open/milaboratories.embedding-clustering.model";
 import { defineAppV3 } from "@platforma-sdk/ui-vue";
@@ -38,7 +38,10 @@ type AppModel = ReturnType<typeof useApp>["model"];
 // everywhere, so a stale embedding can never be offered, picked, or used to clear a valid pick.
 export function currentEmbeddingOptions(model: AppModel) {
   const result = model.outputs.embeddingOptions;
-  if (result === undefined || result.forDataset !== datasetKey(model.data.datasetRef)) {
+  if (
+    result === undefined ||
+    result.forDataset !== selectionKey(model.data.datasetRef, model.data.filterRef)
+  ) {
     return undefined;
   }
   return result.options;

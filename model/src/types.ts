@@ -60,6 +60,11 @@ export function datasetKey(ref: PlRef | undefined): string {
   return JSON.stringify(ref ? [ref.blockId, ref.name] : null);
 }
 
+// The same, for a dataset plus its subset: the embedding list also depends on the subset.
+export function selectionKey(ref: PlRef | undefined, filterRef: PlRef | undefined): string {
+  return `${datasetKey(ref)}/${datasetKey(filterRef)}`;
+}
+
 // Single source of truth for the auto-subtitle (also the workflow trace label, main.tpl). The UI's
 // syncDefaultBlockLabel (app.ts) only resolves the human-readable embedding-column label from the
 // result pool (which a pure function can't do) and calls this; it owns no format logic.

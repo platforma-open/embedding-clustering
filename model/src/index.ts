@@ -17,7 +17,7 @@ import {
 import { kind } from "@platforma-open/milaboratories.embedding-clustering.kind";
 import { blockDataModel } from "./dataModel";
 import { deriveTemplateParams } from "./templateParams";
-import { cpuError, datasetKey, memError } from "./types";
+import { cpuError, memError, selectionKey } from "./types";
 
 export type * from "@milaboratories/helpers";
 export type * from "@platforma-open/milaboratories.embedding-clustering.kind";
@@ -31,6 +31,7 @@ export {
   MAX_CPU,
   MAX_MEM_GIB,
   memError,
+  selectionKey,
 } from "./types";
 export { blockDataModel, initBlockData } from "./dataModel";
 export { deriveTemplateParams } from "./templateParams";
@@ -255,17 +256,35 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
     const datasetSpec = ctx.resultPool.getPColumnSpecByRef(ref);
     const cloneAxis = datasetSpec?.axesSpec?.[1];
     if (cloneAxis === undefined) return undefined;
-    const options = ctx.resultPool.getOptions(
+    // Full-data embeddings always; a subset's embedding only when that subset is picked here
+    const subset =
+      ctx.data.filterRef &&
+      createGlobalPObjectId(ctx.data.filterRef.blockId, ctx.data.filterRef.name);
+    const allOptions = ctx.resultPool.getOptions(
       (spec) =>
         isPColumnSpec(spec) &&
         spec.name === "pl7.app/embedding" &&
+        (spec.domain?.["pl7.app/inputSubset"] ?? subset) === subset &&
         embeddingMatchesClonotypeAxis(spec.axesSpec?.[0], cloneAxis),
       { label: { includeNativeLabel: true } },
     );
+    // A full-data embedding is hidden when the subset has its own of the same model and sequence
+    const described = allOptions.map((o) => {
+      const {
+        "pl7.app/inputSubset": stamp,
+        "pl7.app/blockId": _b,
+        ...rest
+      } = ctx.resultPool.getPColumnSpecByRef(o.ref)?.domain ?? {};
+      return { o, stamp, key: JSON.stringify(Object.entries(rest).sort()) };
+    });
+    const subsetKeys = new Set(described.filter((d) => d.stamp !== undefined).map((d) => d.key));
+    const options = described
+      .filter((d) => d.stamp !== undefined || !subsetKeys.has(d.key))
+      .map((d) => d.o);
     // Stamped with the dataset it was computed for: right after a dataset switch this output still
     // holds the previous dataset's list for a few seconds, and the UI must not offer it.
     return {
-      forDataset: datasetKey(ref),
+      forDataset: selectionKey(ref, ctx.data.filterRef),
       options: options.map((o) => ({
         ref: o.ref,
         label: o.label,
