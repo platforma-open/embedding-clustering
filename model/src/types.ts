@@ -10,6 +10,8 @@ export type BlockData = {
   defaultBlockLabel: string;
   customBlockLabel: string;
   datasetRef?: PlRef;
+  // Subset column picked with the dataset in PlDatasetSelector (e.g. a Repertoire Labeling label).
+  filterRef?: PlRef;
   // Auto-derived from the selected embedding column (source sequence column(s) for centroid/MSA
   // display). The user never picks this directly in embedding clustering.
   sequencesRef: SUniversalPColumnId[];
@@ -56,6 +58,11 @@ export const memError = (mem: number | undefined) => wholeNumberError(mem, MAX_M
 // current one, and never offer another dataset's embeddings.
 export function datasetKey(ref: PlRef | undefined): string {
   return JSON.stringify(ref ? [ref.blockId, ref.name] : null);
+}
+
+// The same, for a dataset plus its subset: the embedding list also depends on the subset.
+export function selectionKey(ref: PlRef | undefined, filterRef: PlRef | undefined): string {
+  return `${datasetKey(ref)}/${datasetKey(filterRef)}`;
 }
 
 // Single source of truth for the auto-subtitle (also the workflow trace label, main.tpl). The UI's

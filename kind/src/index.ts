@@ -9,9 +9,9 @@ import {
 import { name, version } from "../package.json" with { type: "json" };
 
 /**
- * This block's init-params contract — everything a user sets by hand: the dataset,
- * the embedding column to cluster by, the HDBSCAN knobs, the resource overrides and
- * the subtitle they type.
+ * This block's init-params contract — everything a user sets by hand: the dataset
+ * and the subset it is narrowed to, the embedding column to cluster by, the HDBSCAN
+ * knobs, the resource overrides and the subtitle they type.
  *
  * `sequencesRef` is here despite being derived rather than picked. The panel writes
  * it from the chosen embedding column, and the workflow reads it to decide whether
@@ -29,6 +29,8 @@ import { name, version } from "../package.json" with { type: "json" };
  */
 export type BlockParams = {
   datasetRef?: PlRef;
+  /** A subset column (`pl7.app/isSubset`) the dataset is restricted to before clustering. */
+  filterRef?: PlRef;
   embeddingRef?: PlRef;
   sequencesRef?: SUniversalPColumnId[];
   minClusterSize?: number;
@@ -55,6 +57,7 @@ function parseInitializationParams(value: unknown): BlockParams {
 
   const {
     datasetRef,
+    filterRef,
     embeddingRef,
     sequencesRef,
     minClusterSize,
@@ -68,6 +71,9 @@ function parseInitializationParams(value: unknown): BlockParams {
     throw new Error(
       "'datasetRef' must be a reference to an upstream dataset, written as { block, name }.",
     );
+  }
+  if (filterRef !== undefined && !isPlRef(filterRef)) {
+    throw new Error("'filterRef' must be a reference to a subset column.");
   }
   // A PlRef rather than a column id, so the workflow can wire the producing block
   // in as an upstream.
@@ -100,6 +106,7 @@ function parseInitializationParams(value: unknown): BlockParams {
 
   return {
     datasetRef,
+    filterRef,
     embeddingRef,
     sequencesRef: sequencesRef as SUniversalPColumnId[] | undefined,
     minClusterSize,
