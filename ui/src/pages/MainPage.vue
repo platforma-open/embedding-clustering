@@ -222,7 +222,7 @@ const clusterAxis = computed<AxisId>(() => {
         >
           <template #tooltip>
             Largest cluster to keep, counted in distinct sequences (identical sequences count once,
-            see the Unique Embeddings column). Groups that would be larger are broken into smaller
+            see the Cluster Size (no duplicates) column). Groups that would be larger are broken into smaller
             clusters or left unclustered. Off by default: large real families stay whole and only
             clusters far larger than the rest are re-clustered.
           </template>

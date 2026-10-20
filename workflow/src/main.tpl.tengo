@@ -392,9 +392,9 @@ wf.body(func(args) {
 		spec: setTableProps({
 			name: "pl7.app/clustering/uniqueEmbeddingCount",
 			valueType: "Int"
-		}, "Unique Embeddings", false, "2990",
+		}, "Cluster Size (no duplicates)", true, "2990",
 			"Number of distinct embedding vectors in the cluster. Identical sequences share one vector, so this " +
-			"can be much smaller than the cluster size; the maximum cluster size setting counts these.")
+			"can be much smaller than the cluster size; Max Cluster Size counts these.")
 	}, {
 		column: "clusterLabel",
 		spec: {

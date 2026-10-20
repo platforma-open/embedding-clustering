@@ -23,7 +23,7 @@ Results are explored as a per-cluster table, a bubble plot of the most abundant 
 ## Inputs & outputs
 
 * **Input:** per-sequence embedding vectors from [Sequence Embeddings](https://github.com/platforma-open/sequence-embeddings) — for antibody, TCR, or peptide datasets. You choose which embedding column to cluster when several are present.
-* **Output:** a cluster ID per sequence with cluster-level statistics (size, unique embeddings, related members, radius, abundance) and a Reference Centroid sequence per cluster, plus an abundance bubble plot and a cluster size histogram. Reference Centroid columns are named and tagged as in Sequence Clustering, so downstream blocks such as Differential Abundance can show them in their alignment view.
+* **Output:** a cluster ID per sequence with cluster-level statistics (size, size without duplicates, related members, radius, abundance) and a Reference Centroid sequence per cluster, plus an abundance bubble plot and a cluster size histogram. Reference Centroid columns are named and tagged as in Sequence Clustering, so downstream blocks such as Differential Abundance can show them in their alignment view.
 
 ## Specifications
 
@@ -88,7 +88,7 @@ It keeps a cluster only if at least this percentage of its distinct sequences re
 
 ### What does the Max Cluster Size do?
 
-When set, no cluster larger than it is kept — groups that would be larger are broken into smaller clusters or left unassigned — and it replaces the re-clustering of oversized clusters. It counts distinct sequences, as the Unique Embeddings column shows, not members. It is off by default because a fixed cap also breaks up real large families made of many different sequences.
+When set, no cluster larger than it is kept — groups that would be larger are broken into smaller clusters or left unassigned — and it replaces the re-clustering of oversized clusters. It counts distinct sequences, as the Cluster Size (no duplicates) column shows, not members. It is off by default because a fixed cap also breaks up real large families made of many different sequences.
 
 ### Why are large clusters re-clustered?
 
