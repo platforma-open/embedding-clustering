@@ -65,7 +65,7 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
     // check off (0) the block runs without them.
     if (data.minSequenceSupport > 0 && (data.sequencesRef?.length ?? 0) === 0)
       throw new Error(
-        "The source sequence column of the selected embedding was not found. If this persists after a few seconds, pick another embedding or set Minimal Sequence Support to 0.",
+        "The source sequence column of the selected embedding was not found. If this persists after a few seconds, pick another embedding or set Min Sequence Agreement to 0.",
       );
     // The number fields show these errors but still store the value; keep Run blocked until it is fixed.
     const cpuMsg = cpuError(data.cpu);
@@ -73,7 +73,7 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
     const memMsg = memError(data.mem);
     if (memMsg) throw new Error(`Memory (GiB): ${memMsg}`);
     const shareMsg = minSequenceSupportError(data.minSequenceSupport);
-    if (shareMsg) throw new Error(`Minimal sequence support (%): ${shareMsg}`);
+    if (shareMsg) throw new Error(`Min Sequence Agreement (%): ${shareMsg}`);
     const maxMsg = maxClusterSizeError(data.maxClusterSize, data.minClusterSize);
     if (maxMsg) throw new Error(`Max Cluster Size: ${maxMsg}`);
 

@@ -179,7 +179,7 @@ const clusterAxis = computed<AxisId>(() => {
 
       <PlNumberField
         v-model="app.model.data.minSequenceSupport"
-        label="Minimal Sequence Support (%)"
+        label="Min Sequence Agreement (%)"
         :minValue="0"
         :step="5"
         :maxValue="100"
@@ -187,12 +187,10 @@ const clusterAxis = computed<AxisId>(() => {
         placeholder="0"
       >
         <template #tooltip>
-          Keeps a cluster only if at least this percentage of its distinct sequences resemble its
-          Reference Centroid more than random sequences from the rest of the data do. This stops the
-          model from grouping sequences that merely contain a similar mix of amino acids, which can
-          happen where the embedding space carries too little information to tell the sequences
-          apart. Lower it, or set it to 0, if you expect families with very different sequences.
-          Default {{ DEFAULT_MIN_SEQUENCE_SUPPORT }}%.
+          Keeps a cluster only if at least this percentage of its distinct sequences are more similar
+          to its Reference Centroid than random sequences are. This removes clusters with no support
+          in the sequences, which can form where the embedding cannot tell sequences apart. Set it to
+          0 to turn the check off. Default {{ DEFAULT_MIN_SEQUENCE_SUPPORT }}%.
         </template>
       </PlNumberField>
 

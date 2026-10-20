@@ -420,9 +420,9 @@ wf.body(func(args) {
 					"pl7.app/max": "1",
 					"pl7.app/format": ".0%"
 				}
-			}, "Sequence Support", true, "2980",
-				"Percentage of the cluster's distinct sequences that resemble the Reference Centroid more than " +
-				"random sequences from the rest of the data do.")
+			}, "Sequence Agreement", true, "2980",
+				"Percentage of the cluster's distinct sequences that are more similar to its Reference Centroid " +
+				"than random sequences from other clusters.")
 		})
 	}
 

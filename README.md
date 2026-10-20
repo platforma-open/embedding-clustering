@@ -16,7 +16,7 @@ HDBSCAN is density-based, which is the right fit here: it discovers how many clu
 
 Two refinements handle what density clustering gets wrong on real repertoires. Very large clusters that failed to divide on the first pass are re-clustered internally, so one dominant group resolves into the real sub-groups inside it rather than swallowing the analysis. And the points HDBSCAN leaves as noise are re-clustered once — on by default — to rescue any that form their own small dense groups, no larger than a typical cluster; whatever remains diffuse stays unassigned and becomes its own singleton cluster, so no sequence is silently dropped. Each cluster also gets a Reference Centroid: its medoid, the real member closest to the cluster's center, usable as its representative.
 
-Finally, each cluster is checked against its own sequences. Its Sequence Support is the percentage of its distinct sequences that resemble the Reference Centroid more than random sequences from the rest of the data do. Clusters below the Minimal Sequence Support setting are split back into single sequences. This stops the model from grouping sequences that merely contain a similar mix of amino acids, which can happen where the embedding space carries too little information to tell the sequences apart. An optional Max Cluster Size, counted in distinct sequences, can cap every cluster instead of re-clustering oversized ones.
+Finally, each cluster is checked against its own sequences. Its Sequence Agreement is the percentage of its distinct sequences that are more similar to its Reference Centroid than random sequences are. Clusters below the Min Sequence Agreement setting are split back into single sequences. This removes clusters with no support in the sequences, which can form where the embedding cannot tell sequences apart. An optional Max Cluster Size, counted in distinct sequences, can cap every cluster instead of re-clustering oversized ones.
 
 Results are explored as a per-cluster table, a bubble plot of the most abundant clusters, and a cluster size histogram. Cluster assignments become columns, so [Enrichment Analysis](https://github.com/platforma-open/clonotype-enrichment) can measure enrichment per family across selection rounds, and [Lead Selection](https://github.com/platforma-open/antibody-tcr-lead-selection) can diversify a panel across clusters.
 
@@ -32,9 +32,9 @@ Results are explored as a per-cluster table, a bubble plot of the most abundant 
 | Block title in app | Embedding Clustering |
 | Algorithm | HDBSCAN ([fast_hdbscan](https://github.com/TutteInstitute/fast_hdbscan)), density-based — cluster count discovered, not specified |
 | Preprocessing | Centered PCA to 95% variance, then L2 normalization; identical embeddings clustered as one point |
-| Key parameters | Min Cluster Size; Minimal Sequence Support |
+| Key parameters | Min Cluster Size; Min Sequence Agreement |
 | Large-cluster handling | Oversized clusters re-clustered internally to resolve sub-groups; optional Max Cluster Size caps every cluster instead |
-| Unrelated-sequence filter | Clusters where too few members resemble the Reference Centroid more than random sequences do are split back into single sequences (Minimal Sequence Support, in %) |
+| Sequence agreement filter | A cluster is split back into single sequences when too few of its distinct sequences are more similar to its Reference Centroid than random sequences are (Min Sequence Agreement, in %) |
 | Noise handling | Noise points re-clustered once to rescue small dense groups (on by default); the diffuse remainder becomes singleton clusters |
 | Identical sequences | Clustered as one sequence; always share a cluster ID |
 | Cluster representative | Reference Centroid — the medoid, the real member nearest the cluster center |
@@ -82,9 +82,9 @@ They are re-clustered once — on by default — to rescue any that actually for
 
 Clonotypes with identical embeddings are treated as one sequence, so they always share a cluster ID. When that sequence lies apart from every other sequence (noise), its copies still appear together as one group — which can have fewer members than the minimum cluster size.
 
-### What does Minimal Sequence Support do?
+### What does Min Sequence Agreement do?
 
-It keeps a cluster only if at least this percentage of its distinct sequences resemble its Reference Centroid more than random sequences from the rest of the data do; other clusters are split back into single sequences. It stops the model from grouping sequences that merely contain a similar mix of amino acids, which can happen where the embedding space carries too little information to tell the sequences apart. Lower it, or set it to 0, if you expect families with very different sequences. Each cluster's value is shown in the Sequence Support column.
+It keeps a cluster only if at least this percentage of its distinct sequences are more similar to its Reference Centroid than random sequences are; other clusters are split back into single sequences. This removes clusters with no support in the sequences, which can form where the embedding cannot tell sequences apart. Lower it, or set it to 0, if you expect functionally related members with very different sequences. Each cluster's value is shown in the Sequence Agreement column.
 
 ### What does the Max Cluster Size do?
 
