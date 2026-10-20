@@ -406,8 +406,8 @@ wf.body(func(args) {
 				"pl7.app/format": ".0%"
 			}
 		}, "Sequence Support", true, "2980",
-			"Percentage of members that resemble the cluster's Reference Centroid more than random sequences " +
-			"from the rest of the data do.")
+			"Percentage of the cluster's distinct sequences that resemble the Reference Centroid more than " +
+			"random sequences from the rest of the data do.")
 	}, {
 		column: "clusterLabel",
 		spec: {

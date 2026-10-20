@@ -9,7 +9,7 @@
 
 Filter clusters of unrelated sequences and name the cluster representative Reference Centroid
 
-- New setting Minimal Sequence Support (%) (default 20%): a cluster is kept only if at least this percentage of its members resemble its reference sequence more than random sequences from the rest of the data do; other clusters are split back into single sequences. Each cluster's value is shown in the new Sequence Support column. Existing projects get the default on their next run.
+- New setting Minimal Sequence Support (%) (default 20%): a cluster is kept only if at least this percentage of its distinct sequences resemble its Reference Centroid more than random sequences from the rest of the data do; other clusters are split back into single sequences. Each cluster's value is shown in the new Sequence Support column. Existing projects get the default on their next run.
 - New advanced setting Max Cluster Size, off by default: when set, no cluster with more distinct sequences is kept, replacing the re-clustering of oversized clusters.
 - New Unique Embeddings column: the number of distinct sequences in each cluster, which Max Cluster Size counts.
 - The cluster's medoid sequence is now named "Reference Centroid", tagged as in Sequence Clustering, so downstream blocks such as Differential Abundance treat both alike. Selections of the old "Centroid" columns in downstream blocks need picking again.
