@@ -1,0 +1,101 @@
+// Turns the clustering's raw output into the block's per-cluster and per-member tables, and applies the
+// minimal sequence support filter on the way. A separate template from embedding-clustering.tpl so that
+// changing the filter re-runs only this step: the clustering's identity does not include it.
+self := import("@platforma-sdk/workflow-tengo:tpl")
+exec := import("@platforma-sdk/workflow-tengo:exec")
+assets := import("@platforma-sdk/workflow-tengo:assets")
+
+// exec.formula builders — size the results exec's RAM from its input files.
+f := exec.formula
+
+processResultsSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:process-results")
+createEmptyFilesSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:create-empty-files")
+
+self.validateInputs({
+	"__options__,closed": "",
+	emptyOrNot: "any",
+	clusters: "any",
+	dedupMapping: "any",
+	centroidDistances: "any",
+	cloneTable: "any",
+	isSingleCell: "boolean",
+	numSequences: "number",
+	"minSequenceSupport,?": "number",
+	"mem,?": "number"
+})
+
+self.defineOutputs("abundances", "clusterToSeq", "cloneToCluster", "abundancesPerCluster", "distanceToCentroid", "clusterRadius", "clusterToSeqTop", "clusterRadiusTop", "abundancesTop")
+
+self.body(func(inputs) {
+	// Minimal sequence support, in percent (0 keeps every cluster).
+	minSequenceSupport := is_undefined(inputs.minSequenceSupport) ? 0 : inputs.minSequenceSupport
+
+	builder := undefined
+	if string(inputs.emptyOrNot.getData()) == "empty" {
+		// Shared empty-input guard: emit empty files with proper headers.
+		emptyFilesBuilder := exec.builder().
+			software(createEmptyFilesSw).
+			mem("1GiB").
+			cpu(1).
+			arg("--num-sequences").arg(string(inputs.numSequences))
+		if inputs.isSingleCell {
+			emptyFilesBuilder = emptyFilesBuilder.arg("--is-single-cell")
+		}
+		builder = emptyFilesBuilder
+	} else {
+		// Expand reps -> members via dedup_mapping, score each cluster's sequence support and dissolve those
+		// below the minimum; --distances uses the precomputed cosine distances (no Levenshtein, no 1.0 cap).
+		resultBuilder := exec.builder().
+			name("embedding-clustering-results").
+			software(processResultsSw).
+			addFile("clusters.tsv", inputs.clusters).
+			addFile("cloneTable.tsv", inputs.cloneTable, { tag: "table" }).
+			addFile("dedup_mapping.tsv", inputs.dedupMapping, { tag: "mapping" }).
+			addFile("centroid_distances.tsv", inputs.centroidDistances).
+			arg("--distances").arg("centroid_distances.tsv").
+			arg("--min-sequence-support").arg(string(minSequenceSupport))
+
+		// RAM: an explicit `mem` (Advanced Settings) is honored verbatim, as for the clustering step; otherwise it
+		// scales with the clonotype count
+		// (dedup_mapping.tsv, one row per clonotype) and the sample rows (cloneTable.tsv, one row per sample and
+		// clonotype). Measured peak ~ 15.5x mapping + 4x table (1.77M real and 10M synthetic clonotypes,
+		// 1-10 samples per clonotype), so about twice that: 32x mapping + 8x table + 8 GiB.
+		if !is_undefined(inputs.mem) {
+			resultBuilder = resultBuilder.resources({
+				onCPU: { cpu: 8, ram: string(inputs.mem) + "GiB" }
+			})
+		} else {
+			resultBuilder = resultBuilder.resources({
+				onCPU: {
+					cpu: 8,
+					ram: f.size("mapping").times(32).plus(f.size("table").times(8)).plus(f.gib(8)).between(f.gib(16), f.gib(256)).staticFallback(f.gib(64))
+				}
+			})
+		}
+		builder = resultBuilder
+	}
+
+	result := builder.
+		saveFile("abundances.tsv").
+		saveFile("cluster-to-seq.tsv").
+		saveFile("clone-to-cluster.tsv").
+		saveFile("abundances-per-cluster.tsv").
+		saveFile("distance_to_centroid.tsv").
+		saveFile("cluster-radius.tsv").
+		saveFile("cluster-to-seq-top.tsv").
+		saveFile("cluster-radius-top.tsv").
+		saveFile("abundances-top.tsv").
+		run()
+
+	return {
+		abundances: result.getFile("abundances.tsv"),
+		clusterToSeq: result.getFile("cluster-to-seq.tsv"),
+		cloneToCluster: result.getFile("clone-to-cluster.tsv"),
+		abundancesPerCluster: result.getFile("abundances-per-cluster.tsv"),
+		distanceToCentroid: result.getFile("distance_to_centroid.tsv"),
+		clusterRadius: result.getFile("cluster-radius.tsv"),
+		clusterToSeqTop: result.getFile("cluster-to-seq-top.tsv"),
+		clusterRadiusTop: result.getFile("cluster-radius-top.tsv"),
+		abundancesTop: result.getFile("abundances-top.tsv")
+	}
+})

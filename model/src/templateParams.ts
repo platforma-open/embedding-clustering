@@ -21,6 +21,8 @@ export function deriveTemplateParams(data: BlockData): BlockParams {
     sequencesRef: data.sequencesRef,
     minClusterSize: data.minClusterSize,
     rescueNoise: data.rescueNoise,
+    minSequenceSupport: data.minSequenceSupport,
+    maxClusterSize: data.maxClusterSize,
     mem: data.mem,
     cpu: data.cpu,
     customBlockLabel: data.customBlockLabel,

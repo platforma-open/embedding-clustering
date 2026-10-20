@@ -24,8 +24,9 @@ def main():
         "abundances.tsv", sep="\t", index=False
     )
 
-    # 2. cluster-to-seq.tsv: clusterId, clusterLabel, size, sequence_* (centroid sequences)
-    cluster_to_seq_cols = ["clusterId", "clusterLabel", "size"] + sequence_cols
+    # 2. cluster-to-seq.tsv: clusterId, clusterLabel, size, uniqueEmbeddings, sequenceSupport, sequence_* (centroid
+    #    sequences)
+    cluster_to_seq_cols = ["clusterId", "clusterLabel", "size", "uniqueEmbeddings", "sequenceSupport"] + sequence_cols
     pd.DataFrame(columns=cluster_to_seq_cols).to_csv(
         "cluster-to-seq.tsv", sep="\t", index=False
     )

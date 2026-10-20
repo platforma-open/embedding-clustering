@@ -3,9 +3,12 @@ import { PlMultiSequenceAlignment } from "@milaboratories/multi-sequence-alignme
 import strings from "@milaboratories/strings";
 import {
   cpuError,
+  DEFAULT_MIN_SEQUENCE_SUPPORT,
   MAX_CPU,
   MAX_MEM_GIB,
+  maxClusterSizeError,
   memError,
+  minSequenceSupportError,
 } from "@platforma-open/milaboratories.embedding-clustering.model";
 import type {
   AxisId,
@@ -32,7 +35,7 @@ import {
   usePlDataTableSettingsV2,
 } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
-import { currentEmbeddingOptions, useApp } from "../app";
+import { currentEmbeddingOptions, deriveSourceSeqRefs, useApp } from "../app";
 
 const app = useApp();
 
@@ -87,64 +90,11 @@ const tableSettings = usePlDataTableSettingsV2({
 const isSequenceColumn = (column: PColumnIdAndSpec) =>
   app.model.data.sequencesRef?.some((r) => r === column.columnId) ?? false;
 
-// Auto-derive the source sequence column(s) for the picked embedding column, so the user need
-// not pick a sequence column. Embeddings are amino-acid based (ESM-2).
-function deriveSourceSeqRefs(embeddingRef: PlRef): SUniversalPColumnId[] {
-  const embOpts = currentEmbeddingOptions(app.model);
-  const seqOpts = app.model.outputs.sequenceOptions;
-  if (!embOpts || !seqOpts) return [];
-  const embFeature = embOpts.find(
-    (o) => o.ref.blockId === embeddingRef.blockId && o.ref.name === embeddingRef.name,
-  )?.feature;
-  if (!embFeature) return [];
-  const domainOf = (id: string): Record<string, string> => {
-    try {
-      return (JSON.parse(id)?.domain ?? {}) as Record<string, string>;
-    } catch {
-      return {};
-    }
-  };
-  const nameOf = (id: string): string | undefined => {
-    try {
-      return JSON.parse(id)?.name as string | undefined;
-    } catch {
-      return undefined;
-    }
-  };
-  const norm = (f: string | undefined) => (f ?? "").replace(/InFrame$/i, "");
-  // Source sequences are amino acid (ESM-2); guard explicitly so a stray nucleotide column never matches.
-  const isAa = (id: string) => domainOf(id)["pl7.app/alphabet"] === "aminoacid";
-  const seqFeature = (id: string) => {
-    const d = domainOf(id);
-    const feature = d["pl7.app/vdj/feature"] ?? d["pl7.app/feature"];
-    // synthetic-repertoire-profiler's whole-variant sequence is the V-domain; sequence-embeddings
-    // tags its embedding as VDJRegion.
-    return feature === "amplicon-sequence" ? "VDJRegion" : feature;
-  };
-  // Fv = VH+VL VDJRegion concatenation -> both chains' VDJRegion source columns.
-  if (embFeature === "Fv") {
-    return seqOpts
-      .filter((o) => isAa(o.value) && norm(seqFeature(o.value)) === "VDJRegion")
-      .map((o) => o.value);
-  }
-  // scFv = the single-construct sequence column.
-  if (embFeature === "scFv") {
-    return seqOpts
-      .filter((o) => isAa(o.value) && nameOf(o.value) === "pl7.app/vdj/scFv-sequence")
-      .map((o) => o.value);
-  }
-  // CDR3 / VDJRegion / peptide: match on the InFrame-normalized feature.
-  const target = norm(embFeature);
-  return seqOpts
-    .filter((o) => isAa(o.value) && norm(seqFeature(o.value)) === target)
-    .map((o) => o.value);
-}
-
 // On embedding-column pick: store the ref and auto-derive the source sequence column(s) for the
 // centroid/MSA display in the same gesture.
 function onEmbeddingRefChange(ref?: PlRef) {
   app.model.data.embeddingRef = ref;
-  app.model.data.sequencesRef = ref ? deriveSourceSeqRefs(ref) : [];
+  app.model.data.sequencesRef = ref ? deriveSourceSeqRefs(app.model, ref) : [];
 }
 
 // Set instructions to track cluster axis
@@ -227,10 +177,27 @@ const clusterAxis = computed<AxisId>(() => {
         }}
       </PlAlert>
 
+      <PlNumberField
+        v-model="app.model.data.minSequenceSupport"
+        label="Min Sequence Agreement (%)"
+        :minValue="0"
+        :step="5"
+        :maxValue="100"
+        :validate="minSequenceSupportError"
+        placeholder="0"
+      >
+        <template #tooltip>
+          Keeps a cluster only if at least this percentage of its distinct sequences are more
+          similar to its Reference Centroid than random sequences are. This removes clusters with no
+          support in the sequences, which can form where the embedding cannot tell sequences apart.
+          Set it to 0 to turn the check off. Default {{ DEFAULT_MIN_SEQUENCE_SUPPORT }}%.
+        </template>
+      </PlNumberField>
+
       <PlAccordionSection :label="strings.titles.advancedSettings">
         <PlNumberField
           v-model="app.model.data.minClusterSize"
-          label="Min cluster size"
+          label="Min Cluster Size"
           :minValue="2"
           :step="1"
         >
@@ -239,6 +206,23 @@ const clusterAxis = computed<AxisId>(() => {
             a cluster. Lower values produce more, smaller clusters. Default 2. Clonotypes that don't
             fall into any group are each reported as their own cluster, so the results can include
             clusters smaller than this value.
+          </template>
+        </PlNumberField>
+
+        <PlNumberField
+          v-model="app.model.data.maxClusterSize"
+          label="Max Cluster Size"
+          :minValue="Math.max(2, app.model.data.minClusterSize ?? 2)"
+          :step="1"
+          :validate="(v: number) => maxClusterSizeError(v, app.model.data.minClusterSize)"
+          clearable
+          placeholder="Off"
+        >
+          <template #tooltip>
+            Largest cluster to keep, counted in distinct sequences (identical sequences count once,
+            see the Cluster Size (no duplicates) column). Groups that would be larger are broken
+            into smaller clusters or left unclustered. Off by default: large real families stay
+            whole and only clusters far larger than the rest are re-clustered.
           </template>
         </PlNumberField>
 
