@@ -187,10 +187,10 @@ const clusterAxis = computed<AxisId>(() => {
         placeholder="0"
       >
         <template #tooltip>
-          Keeps a cluster only if at least this percentage of its distinct sequences are more similar
-          to its Reference Centroid than random sequences are. This removes clusters with no support
-          in the sequences, which can form where the embedding cannot tell sequences apart. Set it to
-          0 to turn the check off. Default {{ DEFAULT_MIN_SEQUENCE_SUPPORT }}%.
+          Keeps a cluster only if at least this percentage of its distinct sequences are more
+          similar to its Reference Centroid than random sequences are. This removes clusters with no
+          support in the sequences, which can form where the embedding cannot tell sequences apart.
+          Set it to 0 to turn the check off. Default {{ DEFAULT_MIN_SEQUENCE_SUPPORT }}%.
         </template>
       </PlNumberField>
 
