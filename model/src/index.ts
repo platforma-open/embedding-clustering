@@ -61,10 +61,11 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
       );
     // The sequence support check compares the sequences the embedding was computed from; without them
     // every cluster would fail it. The UI derives them from the embedding (and fills them in once its
-    // options load), so an empty list means they could not be found.
-    if (data.sequencesRef.length === 0)
+    // options load), so an empty list means they are still loading or could not be found. With the
+    // check off (0) the block runs without them.
+    if (data.minSequenceSupport > 0 && (data.sequencesRef?.length ?? 0) === 0)
       throw new Error(
-        "The source sequence column of the selected embedding could not be found. Wait a few seconds or pick the embedding again.",
+        "The source sequence column of the selected embedding was not found. If this persists after a few seconds, pick another embedding or set Minimal Sequence Support to 0.",
       );
     // The number fields show these errors but still store the value; keep Run blocked until it is fixed.
     const cpuMsg = cpuError(data.cpu);
@@ -74,7 +75,7 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
     const shareMsg = minSequenceSupportError(data.minSequenceSupport);
     if (shareMsg) throw new Error(`Minimal sequence support (%): ${shareMsg}`);
     const maxMsg = maxClusterSizeError(data.maxClusterSize, data.minClusterSize);
-    if (maxMsg) throw new Error(`Maximum cluster size: ${maxMsg}`);
+    if (maxMsg) throw new Error(`Max Cluster Size: ${maxMsg}`);
 
     // sequencesRef is auto-derived from the embedding column (centroid/MSA display and the sequence
     // support check; checked non-empty above); the embedding model is read from the column spec in the
@@ -256,11 +257,16 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
     // holds the previous dataset's list for a few seconds, and the UI must not offer it.
     return {
       forDataset: datasetKey(ref),
-      options: options.map((o) => ({
-        ref: o.ref,
-        label: o.label,
-        feature: ctx.resultPool.getPColumnSpecByRef(o.ref)?.domain?.["pl7.app/feature"],
-      })),
+      options: options.map((o) => {
+        const domain = ctx.resultPool.getPColumnSpecByRef(o.ref)?.domain;
+        return {
+          ref: o.ref,
+          label: o.label,
+          feature: domain?.["pl7.app/feature"],
+          // Single-chain VDJ embeddings carry their chain (A / B); peptide, Fv and scFv ones do not.
+          chain: domain?.["pl7.app/vdj/scClonotypeChain"],
+        };
+      }),
     };
   })
 

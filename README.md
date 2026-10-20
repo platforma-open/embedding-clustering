@@ -16,7 +16,7 @@ HDBSCAN is density-based, which is the right fit here: it discovers how many clu
 
 Two refinements handle what density clustering gets wrong on real repertoires. Very large clusters that failed to divide on the first pass are re-clustered internally, so one dominant group resolves into the real sub-groups inside it rather than swallowing the analysis. And the points HDBSCAN leaves as noise are re-clustered once — on by default — to rescue any that form their own small dense groups, no larger than a typical cluster; whatever remains diffuse stays unassigned and becomes its own singleton cluster, so no sequence is silently dropped. Each cluster also gets a Reference Centroid: its medoid, the real member closest to the cluster's center, usable as its representative.
 
-Finally, each cluster is checked against its own sequences. Its Sequence Support is the percentage of members that resemble the Reference Centroid more than random sequences from the rest of the data do. Clusters below the Minimal Sequence Support setting are split back into single sequences. This stops the model from grouping sequences that merely contain a similar mix of amino acids, which can happen where the embedding space carries too little information to tell the sequences apart. An optional Maximum Cluster Size, counted in distinct sequences, can cap every cluster instead of re-clustering oversized ones.
+Finally, each cluster is checked against its own sequences. Its Sequence Support is the percentage of members that resemble the Reference Centroid more than random sequences from the rest of the data do. Clusters below the Minimal Sequence Support setting are split back into single sequences. This stops the model from grouping sequences that merely contain a similar mix of amino acids, which can happen where the embedding space carries too little information to tell the sequences apart. An optional Max Cluster Size, counted in distinct sequences, can cap every cluster instead of re-clustering oversized ones.
 
 Results are explored as a per-cluster table, a bubble plot of the most abundant clusters, and a cluster size histogram. Cluster assignments become columns, so [Enrichment Analysis](https://github.com/platforma-open/clonotype-enrichment) can measure enrichment per family across selection rounds, and [Lead Selection](https://github.com/platforma-open/antibody-tcr-lead-selection) can diversify a panel across clusters.
 
@@ -32,8 +32,8 @@ Results are explored as a per-cluster table, a bubble plot of the most abundant 
 | Block title in app | Embedding Clustering |
 | Algorithm | HDBSCAN ([fast_hdbscan](https://github.com/TutteInstitute/fast_hdbscan)), density-based — cluster count discovered, not specified |
 | Preprocessing | Centered PCA to 95% variance, then L2 normalization; identical embeddings clustered as one point |
-| Key parameters | Minimum cluster size; Minimal Sequence Support |
-| Large-cluster handling | Oversized clusters re-clustered internally to resolve sub-groups; optional Maximum Cluster Size caps every cluster instead |
+| Key parameters | Min Cluster Size; Minimal Sequence Support |
+| Large-cluster handling | Oversized clusters re-clustered internally to resolve sub-groups; optional Max Cluster Size caps every cluster instead |
 | Unrelated-sequence filter | Clusters where too few members resemble the Reference Centroid more than random sequences do are split back into single sequences (Minimal Sequence Support, in %) |
 | Noise handling | Noise points re-clustered once to rescue small dense groups (on by default); the diffuse remainder becomes singleton clusters |
 | Identical sequences | Clustered as one sequence; always share a cluster ID |
@@ -70,7 +70,7 @@ When you expect functionally related sequences whose amino acids differ enough t
 
 Because you do not know how many families are in a repertoire. HDBSCAN infers the number of clusters from the data, handles clusters of differing size and density, and can leave a sequence unassigned rather than forcing it into the nearest group. k-means would require you to guess the count and would assign everything regardless of fit.
 
-### What does the minimum cluster size do?
+### What does the Min Cluster Size do?
 
 Sets the smallest group HDBSCAN will call a cluster, counted in distinct sequences: clonotypes with identical embeddings count once. Raise it for fewer, larger, more confident clusters; lower it to resolve small families at the cost of more noise. It is the main knob for cluster granularity.
 
@@ -78,7 +78,7 @@ Sets the smallest group HDBSCAN will call a cluster, counted in distinct sequenc
 
 They are re-clustered once — on by default — to rescue any that actually form small dense groups of their own, no larger than a typical cluster. Anything still diffuse after that becomes its own singleton cluster, so every input sequence carries a cluster assignment and nothing is silently dropped.
 
-### Why are some clusters smaller than the minimum cluster size?
+### Why are some clusters smaller than the Min Cluster Size?
 
 Clonotypes with identical embeddings are treated as one sequence, so they always share a cluster ID. When that sequence lies apart from every other sequence (noise), its copies still appear together as one group — which can have fewer members than the minimum cluster size.
 
@@ -86,7 +86,7 @@ Clonotypes with identical embeddings are treated as one sequence, so they always
 
 It keeps a cluster only if at least this percentage of its members resemble its Reference Centroid more than random sequences from the rest of the data do; other clusters are split back into single sequences. It stops the model from grouping sequences that merely contain a similar mix of amino acids, which can happen where the embedding space carries too little information to tell the sequences apart. Lower it, or set it to 0, if you expect families with very different sequences. Each cluster's value is shown in the Sequence Support column.
 
-### What does the Maximum Cluster Size do?
+### What does the Max Cluster Size do?
 
 When set, no cluster larger than it is kept — groups that would be larger are broken into smaller clusters or left unassigned — and it replaces the re-clustering of oversized clusters. It counts distinct sequences, as the Unique Embeddings column shows, not members. It is off by default because a fixed cap also breaks up real large families made of many different sequences.
 

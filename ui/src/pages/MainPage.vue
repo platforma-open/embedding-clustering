@@ -199,7 +199,7 @@ const clusterAxis = computed<AxisId>(() => {
       <PlAccordionSection :label="strings.titles.advancedSettings">
         <PlNumberField
           v-model="app.model.data.minClusterSize"
-          label="Min cluster size"
+          label="Min Cluster Size"
           :minValue="2"
           :step="1"
         >
@@ -211,18 +211,9 @@ const clusterAxis = computed<AxisId>(() => {
           </template>
         </PlNumberField>
 
-        <PlCheckbox v-model="app.model.data.rescueNoise">
-          Re-cluster noise
-          <PlTooltip class="info">
-            <template #tooltip>
-              After the main clustering, re-cluster the points left as noise to rescue any that form
-              their own dense groups. On by default.
-            </template>
-          </PlTooltip>
-        </PlCheckbox>
         <PlNumberField
           v-model="app.model.data.maxClusterSize"
-          label="Maximum Cluster Size"
+          label="Max Cluster Size"
           :minValue="Math.max(2, app.model.data.minClusterSize ?? 2)"
           :step="1"
           :validate="(v: number) => maxClusterSizeError(v, app.model.data.minClusterSize)"
@@ -236,6 +227,16 @@ const clusterAxis = computed<AxisId>(() => {
             clusters far larger than the rest are re-clustered.
           </template>
         </PlNumberField>
+
+        <PlCheckbox v-model="app.model.data.rescueNoise">
+          Re-cluster noise
+          <PlTooltip class="info">
+            <template #tooltip>
+              After the main clustering, re-cluster the points left as noise to rescue any that form
+              their own dense groups. On by default.
+            </template>
+          </PlTooltip>
+        </PlCheckbox>
 
         <PlSectionSeparator>Resource Allocation</PlSectionSeparator>
         <PlNumberField
