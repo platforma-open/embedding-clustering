@@ -9,7 +9,13 @@ import {
 import { kind } from "@platforma-open/milaboratories.embedding-clustering.kind";
 import { blockDataModel } from "./dataModel";
 import { deriveTemplateParams } from "./templateParams";
-import { cpuError, datasetKey, memError } from "./types";
+import {
+  cpuError,
+  datasetKey,
+  maxClusterSizeError,
+  memError,
+  minSequenceSupportError,
+} from "./types";
 
 export type * from "@milaboratories/helpers";
 export type * from "@platforma-open/milaboratories.embedding-clustering.kind";
@@ -19,10 +25,13 @@ export {
   clampCpu,
   cpuError,
   datasetKey,
+  DEFAULT_MIN_SEQUENCE_SUPPORT,
   getDefaultBlockLabel,
   MAX_CPU,
   MAX_MEM_GIB,
+  maxClusterSizeError,
   memError,
+  minSequenceSupportError,
 } from "./types";
 export { blockDataModel, initBlockData } from "./dataModel";
 export { deriveTemplateParams } from "./templateParams";
@@ -50,14 +59,26 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
       throw new Error(
         "Connect a Sequence Embeddings output and pick an embedding column to cluster by embedding distance",
       );
+    // The sequence support check compares the sequences the embedding was computed from; without them
+    // every cluster would fail it. The UI derives them from the embedding (and fills them in once its
+    // options load), so an empty list means they could not be found.
+    if (data.sequencesRef.length === 0)
+      throw new Error(
+        "The source sequence column of the selected embedding could not be found. Wait a few seconds or pick the embedding again.",
+      );
     // The number fields show these errors but still store the value; keep Run blocked until it is fixed.
     const cpuMsg = cpuError(data.cpu);
     if (cpuMsg) throw new Error(`CPU (cores): ${cpuMsg}`);
     const memMsg = memError(data.mem);
     if (memMsg) throw new Error(`Memory (GiB): ${memMsg}`);
+    const shareMsg = minSequenceSupportError(data.minSequenceSupport);
+    if (shareMsg) throw new Error(`Minimal sequence support (%): ${shareMsg}`);
+    const maxMsg = maxClusterSizeError(data.maxClusterSize, data.minClusterSize);
+    if (maxMsg) throw new Error(`Maximum cluster size: ${maxMsg}`);
 
-    // sequencesRef is auto-derived from the embedding column (for centroid/MSA display) and may be
-    // empty; the embedding model is read from the column spec in the workflow, not snapshotted here.
+    // sequencesRef is auto-derived from the embedding column (centroid/MSA display and the sequence
+    // support check; checked non-empty above); the embedding model is read from the column spec in the
+    // workflow, not snapshotted here.
     return {
       defaultBlockLabel: data.defaultBlockLabel,
       customBlockLabel: data.customBlockLabel,
@@ -66,6 +87,8 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
       embeddingRef: data.embeddingRef,
       minClusterSize: data.minClusterSize,
       rescueNoise: data.rescueNoise,
+      minSequenceSupport: data.minSequenceSupport,
+      maxClusterSize: data.maxClusterSize,
       mem: data.mem,
       cpu: data.cpu,
     };

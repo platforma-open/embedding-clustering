@@ -33,6 +33,8 @@ export type BlockParams = {
   sequencesRef?: SUniversalPColumnId[];
   minClusterSize?: number;
   rescueNoise?: boolean;
+  minSequenceSupport?: number;
+  maxClusterSize?: number;
   mem?: number;
   cpu?: number;
   customBlockLabel?: string;
@@ -59,6 +61,8 @@ function parseInitializationParams(value: unknown): BlockParams {
     sequencesRef,
     minClusterSize,
     rescueNoise,
+    minSequenceSupport,
+    maxClusterSize,
     mem,
     cpu,
     customBlockLabel,
@@ -86,6 +90,21 @@ function parseInitializationParams(value: unknown): BlockParams {
   if (rescueNoise !== undefined && typeof rescueNoise !== "boolean") {
     throw new Error("'rescueNoise' must be a boolean.");
   }
+  // Minimal sequence support, in percent, a cluster needs to be kept (0 keeps all).
+  if (
+    minSequenceSupport !== undefined &&
+    (typeof minSequenceSupport !== "number" ||
+      !(minSequenceSupport >= 0 && minSequenceSupport <= 100))
+  ) {
+    throw new Error("'minSequenceSupport' must be a number between 0 and 100 (percent).");
+  }
+  // Maximum cluster size in distinct embeddings; absent = off. It cannot be below the minimum cluster size
+  const maxClusterSizeFloor = typeof minClusterSize === "number" ? Math.max(2, minClusterSize) : 2;
+  if (maxClusterSize !== undefined && !isIntegerAtLeast(maxClusterSize, maxClusterSizeFloor)) {
+    throw new Error(
+      `'maxClusterSize' must be an integer greater than or equal to the minimum cluster size (${maxClusterSizeFloor}).`,
+    );
+  }
   // Memory 1-1012 GiB and CPU 1-128 cores in integer steps. The workflow forwards
   // both straight to resource scheduling, where a value outside them fails the run.
   if (mem !== undefined && !isIntegerInRange(mem, 1, 1012)) {
@@ -104,6 +123,8 @@ function parseInitializationParams(value: unknown): BlockParams {
     sequencesRef: sequencesRef as SUniversalPColumnId[] | undefined,
     minClusterSize,
     rescueNoise,
+    minSequenceSupport,
+    maxClusterSize,
     mem,
     cpu,
     customBlockLabel,

@@ -1,44 +1,35 @@
-// Embedding-distance clustering. main.tpl.tengo renders this to do the actual work.
+// Embedding-distance clustering. main.tpl.tengo renders this to do the actual work; cluster-results.tpl turns its
+// output into the block's tables.
 self := import("@platforma-sdk/workflow-tengo:tpl")
 exec := import("@platforma-sdk/workflow-tengo:exec")
 assets := import("@platforma-sdk/workflow-tengo:assets")
 
 
-// exec.formula builders — size the clustering and results execs' RAM from their input files.
+// exec.formula builders — size the clustering exec's RAM from its input file.
 f := exec.formula
 
 embeddingClusteringSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:embedding-clustering")
-processResultsSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:process-results")
-createEmptyFilesSw := assets.importSoftware("@platforma-open/milaboratories.embedding-clustering.software:create-empty-files")
 
 self.validateInputs({
 	"__options__,closed": "",
 	emptyOrNot: "any",
-	cloneTable: "any",
 	embeddingMatrix: "any",
-	isSingleCell: "boolean",
-	sequencesRef: "any",
 	keyCol: "string",
 	dimCol: "string",
 	valueCol: "string",
 	"dims,?": "string",
 	"minClusterSize,?": "number",
 	"rescueNoise,?": "boolean",
+	"maxClusterSize,?": "number",
 	"mem,?": "number",
 	"cpu,?": "number"
 })
 
-// clustersFile/clusteringLog carry the saved clusters file + the clustering log (the embedding step's
-// stdout, surfaced by the UI as "Clustering Log").
-self.defineOutputs("abundances", "clusterToSeq", "cloneToCluster", "abundancesPerCluster", "distanceToCentroid", "clusterRadius", "clusterToSeqTop", "clusterRadiusTop", "abundancesTop", "clustersFile", "clusteringLog", "isEmpty")
+// clustersFile/dedupMapping/centroidDistances are the clustering's files (cluster-results.tpl reads them);
+// clusteringLog is its stdout, surfaced by the UI as "Clustering Log".
+self.defineOutputs("clustersFile", "dedupMapping", "centroidDistances", "clusteringLog", "isEmpty")
 
 self.body(func(inputs) {
-	clustersFile := {}
-	clusteringLog := {}
-
-	cloneTable := inputs.cloneTable
-	sequencesRef := inputs.sequencesRef
-	isSingleCell := inputs.isSingleCell
 	minClusterSize := is_undefined(inputs.minClusterSize) ? 2 : inputs.minClusterSize
 	// min_samples is the HDBSCAN density/noise knob (not user-exposed). Base value 5, but capped to
 	// min_cluster_size, never larger.
@@ -55,42 +46,12 @@ self.body(func(inputs) {
 	}
 
 	if string(inputs.emptyOrNot.getData()) == "empty" {
-		// Shared empty-input guard: emit empty files with proper headers.
-		numSequences := len(sequencesRef)
-		emptyFilesBuilder := exec.builder().
-			software(createEmptyFilesSw).
-			mem("1GiB").
-			cpu(1).
-			arg("--num-sequences").arg(string(numSequences))
-
-		if isSingleCell {
-			emptyFilesBuilder = emptyFilesBuilder.arg("--is-single-cell")
-		}
-
-		emptyFiles := emptyFilesBuilder.
-			saveFile("abundances.tsv").
-			saveFile("cluster-to-seq.tsv").
-			saveFile("clone-to-cluster.tsv").
-			saveFile("abundances-per-cluster.tsv").
-			saveFile("distance_to_centroid.tsv").
-			saveFile("cluster-radius.tsv").
-			saveFile("cluster-to-seq-top.tsv").
-			saveFile("cluster-radius-top.tsv").
-			saveFile("abundances-top.tsv").
-			run()
-
+		// Nothing to cluster: cluster-results.tpl writes the empty tables.
 		return {
-			abundances: emptyFiles.getFile("abundances.tsv"),
-			clusterToSeq: emptyFiles.getFile("cluster-to-seq.tsv"),
-			cloneToCluster: emptyFiles.getFile("clone-to-cluster.tsv"),
-			abundancesPerCluster: emptyFiles.getFile("abundances-per-cluster.tsv"),
-			distanceToCentroid: emptyFiles.getFile("distance_to_centroid.tsv"),
-			clusterRadius: emptyFiles.getFile("cluster-radius.tsv"),
-			clusterToSeqTop: emptyFiles.getFile("cluster-to-seq-top.tsv"),
-			clusterRadiusTop: emptyFiles.getFile("cluster-radius-top.tsv"),
-			abundancesTop: emptyFiles.getFile("abundances-top.tsv"),
-			clustersFile: clustersFile,
-			clusteringLog: clusteringLog,
+			clustersFile: {},
+			dedupMapping: {},
+			centroidDistances: {},
+			clusteringLog: {},
 			isEmpty: true
 		}
 	} else {
@@ -148,6 +109,11 @@ self.body(func(inputs) {
 		if rescueNoise {
 			embClustBuilder = embClustBuilder.arg("--rescue-noise")
 		}
+		// Optional maximum cluster size (distinct embeddings): caps the clustering and the noise rescue instead of
+		// splitting oversized clusters.
+		if !is_undefined(inputs.maxClusterSize) {
+			embClustBuilder = embClustBuilder.arg("--max-cluster-size").arg(string(inputs.maxClusterSize))
+		}
 
 		embClust := embClustBuilder.
 			saveFile("clusters.tsv").
@@ -156,64 +122,11 @@ self.body(func(inputs) {
 			saveStdoutStream().
 			run()
 
-		clusters := embClust.getFile("clusters.tsv")
-		dedupMapping := embClust.getFile("dedup_mapping.tsv")
-		centroidDistances := embClust.getFile("centroid_distances.tsv")
-		clusteringLogStream := embClust.getStdoutStream()
-
-		// Step 2: aggregate. Expand reps -> members via dedup_mapping; --distances uses the precomputed
-		// cosine distances (no Levenshtein, no 1.0 cap).
-		resultBuilder := exec.builder().
-			name("embedding-clustering-results").
-			software(processResultsSw).
-			addFile("clusters.tsv", clusters).
-			addFile("cloneTable.tsv", cloneTable, { tag: "table" }).
-			addFile("dedup_mapping.tsv", dedupMapping, { tag: "mapping" }).
-			addFile("centroid_distances.tsv", centroidDistances).
-			arg("--distances").arg("centroid_distances.tsv")
-			
-		// RAM: an explicit `mem` (Advanced Settings) is honored verbatim, as for the clustering step; otherwise it
-		// scales with the clonotype count
-		// (dedup_mapping.tsv, one row per clonotype) and the sample rows (cloneTable.tsv, one row per sample and
-		// clonotype). Measured peak ~ 15.5x mapping + 4x table (1.77M real and 10M synthetic clonotypes,
-		// 1-10 samples per clonotype), so about twice that: 32x mapping + 8x table + 8 GiB.
-		if !is_undefined(inputs.mem) {
-			resultBuilder = resultBuilder.resources({
-				onCPU: { cpu: 8, ram: string(baseMemGiB) + "GiB" }
-			})
-		} else {
-			resultBuilder = resultBuilder.resources({
-				onCPU: {
-					cpu: 8,
-					ram: f.size("mapping").times(32).plus(f.size("table").times(8)).plus(f.gib(8)).between(f.gib(16), f.gib(256)).staticFallback(f.gib(64))
-				}
-			})
-		}
-		result := resultBuilder.
-			saveFile("abundances.tsv").
-			saveFile("cluster-to-seq.tsv").
-			saveFile("clone-to-cluster.tsv").
-			saveFile("abundances-per-cluster.tsv").
-			saveFile("distance_to_centroid.tsv").
-			saveFile("cluster-radius.tsv").
-			saveFile("cluster-to-seq-top.tsv").
-			saveFile("cluster-radius-top.tsv").
-			saveFile("abundances-top.tsv").
-			run()
-
 		return {
-			abundances: result.getFile("abundances.tsv"),
-			clusterToSeq: result.getFile("cluster-to-seq.tsv"),
-			cloneToCluster: result.getFile("clone-to-cluster.tsv"),
-			abundancesPerCluster: result.getFile("abundances-per-cluster.tsv"),
-			distanceToCentroid: result.getFile("distance_to_centroid.tsv"),
-			clusterRadius: result.getFile("cluster-radius.tsv"),
-			clusterToSeqTop: result.getFile("cluster-to-seq-top.tsv"),
-			clusterRadiusTop: result.getFile("cluster-radius-top.tsv"),
-			abundancesTop: result.getFile("abundances-top.tsv"),
-			// Save the clusters file + the clustering log.
-			clustersFile: clusters,
-			clusteringLog: clusteringLogStream,
+			clustersFile: embClust.getFile("clusters.tsv"),
+			dedupMapping: embClust.getFile("dedup_mapping.tsv"),
+			centroidDistances: embClust.getFile("centroid_distances.tsv"),
+			clusteringLog: embClust.getStdoutStream(),
 			isEmpty: false
 		}
 	}

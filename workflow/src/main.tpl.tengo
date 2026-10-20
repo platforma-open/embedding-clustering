@@ -18,20 +18,25 @@ math := import("math")
 emptyCheckTpl := assets.importTemplate(":empty-check")
 anonymizationTpl := assets.importTemplate(":anonymization")
 embeddingClusteringTpl := assets.importTemplate(":embedding-clustering")
+clusterResultsTpl := assets.importTemplate(":cluster-results")
 
-setTableProps := func(spec, label, visibility, orderPriority) {
+setTableProps := func(spec, label, visibility, orderPriority, ...description) {
 	visibilityValue := ""
 	if visibility == true || visibility == false {
 		visibilityValue = visibility ? "default" : "optional"
 	} else {
 		visibilityValue = visibility
 	}
+	annotations := {
+		"pl7.app/label": label,
+		"pl7.app/table/visibility": visibilityValue,
+		"pl7.app/table/orderPriority": orderPriority
+	}
+	if len(description) > 0 && !is_undefined(description[0]) && description[0] != "" {
+		annotations["pl7.app/description"] = description[0]
+	}
 	return maps.deepMerge(spec, {
-		annotations: {
-			"pl7.app/label": label,
-			"pl7.app/table/visibility": visibilityValue,
-			"pl7.app/table/orderPriority": orderPriority
-		}
+		annotations: annotations
 	})
 }
 
@@ -161,10 +166,7 @@ wf.body(func(args) {
 	// matrix / spec / model already computed above.
 	clusteringAnalysis := render.create(embeddingClusteringTpl, {
 		emptyOrNot: emptyOrNot,
-		cloneTable: cloneTable,
 		embeddingMatrix: embeddingMatrix,
-		isSingleCell: isSingleCell,
-		sequencesRef: sequencesRef,
 		// the matrix headers set by strippedEmbSpec above
 		keyCol: "clonotypeKey",
 		dimCol: "embeddingDim",
@@ -172,7 +174,8 @@ wf.body(func(args) {
 		// embedding vector length D from the column spec (undefined for unmapped models -> loader infers)
 		dims: embSpec.annotations["pl7.app/embedding/length"],
 		minClusterSize: args.minClusterSize,
-		rescueNoise: args.rescueNoise
+		rescueNoise: args.rescueNoise,
+		maxClusterSize: args.maxClusterSize
 	}, {
 		metaInputs: {
 			mem: args.mem,
@@ -183,6 +186,22 @@ wf.body(func(args) {
 	clustersFile := clusteringAnalysis.output("clustersFile")
 	clusteringLog := clusteringAnalysis.output("clusteringLog")
 	isEmpty := clusteringAnalysis.output("isEmpty")
+
+	// Per-cluster and per-member tables, with the minimal sequence support filter. Its own template, so a
+	// change of the filter re-runs only this step and the clustering above is recovered.
+	clusterResults := render.create(clusterResultsTpl, {
+		emptyOrNot: emptyOrNot,
+		clusters: clustersFile,
+		dedupMapping: clusteringAnalysis.output("dedupMapping"),
+		centroidDistances: clusteringAnalysis.output("centroidDistances"),
+		cloneTable: cloneTable,
+		isSingleCell: isSingleCell,
+		numSequences: len(sequencesRef),
+		minSequenceSupport: args.minSequenceSupport
+	}, {
+		metaInputs: {
+			mem: args.mem
+	}})
 
 	// Cluster output domain: algorithm + blockId, plus the embedding model so embedding-derived clusters
 	// are distinguishable and traceable. Shared by clusterId and distanceToCentroid below.
@@ -245,7 +264,7 @@ wf.body(func(args) {
 		return result
 	}
 
-	abundancesPf := xsv.importFile(clusteringAnalysis.output("abundances"), "tsv", {
+	abundancesPf := xsv.importFile(clusterResults.output("abundances"), "tsv", {
 		axes: [{
 			column: "sampleId",
 			spec: abundanceSpec.axesSpec[0]
@@ -273,7 +292,7 @@ wf.body(func(args) {
 	}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
 	abundancesPf = deanonymizeSampleKeys(abundancesPf)
 
-	abundancesPerClusterPf := xsv.importFile(clusteringAnalysis.output("abundancesPerCluster"), "tsv", {
+	abundancesPerClusterPf := xsv.importFile(clusterResults.output("abundancesPerCluster"), "tsv", {
 		axes: [{
 			column: "clusterId",
 			spec: clusterIdAxisSpec
@@ -316,7 +335,7 @@ wf.body(func(args) {
 		partitionKeyLength: 0
 	}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
 
-	cloneToClusterPf := xsv.importFile(clusteringAnalysis.output("cloneToCluster"), "tsv", {
+	cloneToClusterPf := xsv.importFile(clusterResults.output("cloneToCluster"), "tsv", {
 		axes: [{
 			column: "clonotypeKey",
 			spec: datasetSpec.axesSpec[1]
@@ -334,7 +353,7 @@ wf.body(func(args) {
 		partitionKeyLength: 0
 	}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
 
-	cloneToClusterLinkPf := xsv.importFile(clusteringAnalysis.output("cloneToCluster"), "tsv", {
+	cloneToClusterLinkPf := xsv.importFile(clusterResults.output("cloneToCluster"), "tsv", {
 		axes: [
 		{
             column: "clusterId",
@@ -369,6 +388,27 @@ wf.body(func(args) {
 			}
 		}, "Cluster Size", true, "3000")
 	}, {
+		column: "uniqueEmbeddings",
+		spec: setTableProps({
+			name: "pl7.app/clustering/uniqueEmbeddingCount",
+			valueType: "Int"
+		}, "Unique Embeddings", false, "2990",
+			"Number of distinct embedding vectors in the cluster. Identical sequences share one vector, so this " +
+			"can be much smaller than the cluster size; the maximum cluster size setting counts these.")
+	}, {
+		column: "sequenceSupport",
+		spec: setTableProps({
+			name: "pl7.app/clustering/sequenceSupport",
+			valueType: "Float",
+			annotations: {
+				"pl7.app/min": "0",
+				"pl7.app/max": "1",
+				"pl7.app/format": ".0%"
+			}
+		}, "Sequence Support", true, "2980",
+			"Percentage of members that resemble the cluster's Reference Centroid more than random sequences " +
+			"from the rest of the data do.")
+	}, {
 		column: "clusterLabel",
 		spec: {
 			name: "pl7.app/label",
@@ -380,10 +420,11 @@ wf.body(func(args) {
 		}
 	}]
 
-	// Add centroid sequence columns (auto-derived source sequences)
+	// Reference centroid sequence columns (auto-derived source sequences)
+	referenceCentroidDesc := "The real cluster member closest to the other members in embedding space (the medoid)."
 	for nr, seq in sequencesRef {
 		spec := maps.clone(columns.getSpec(seq))
-		spec.annotations["pl7.app/label"] = "Centroid " + spec.annotations["pl7.app/label"]
+		spec.annotations["pl7.app/label"] = "Reference Centroid " + spec.annotations["pl7.app/label"]
 
 		// VDJ-specific annotations
 		delete(spec.annotations, "pl7.app/vdj/imputed")
@@ -398,13 +439,13 @@ wf.body(func(args) {
 			spec: setTableProps({
 				name: spec.name,
 				valueType: spec.valueType,
-				domain: spec.domain,
+				domain: maps.deepMerge(spec.domain, { "pl7.app/clustering/sequenceContent": "referenceCentroid" }),
 				annotations: spec.annotations
-			}, spec.annotations["pl7.app/label"], true, "4000")
+			}, spec.annotations["pl7.app/label"], true, "4000", referenceCentroidDesc)
 		})
 	}
 
-	clusterToSeqPf := xsv.importFile(clusteringAnalysis.output("clusterToSeq"), "tsv", {
+	clusterToSeqPf := xsv.importFile(clusterResults.output("clusterToSeq"), "tsv", {
 		axes: [{
 			column: "clusterId",
 			spec: clusterIdAxisSpec
@@ -414,7 +455,7 @@ wf.body(func(args) {
 		partitionKeyLength: 0
 	}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
 
-	distancesPf := xsv.importFile(clusteringAnalysis.output("distanceToCentroid"), "tsv", {
+	distancesPf := xsv.importFile(clusterResults.output("distanceToCentroid"), "tsv", {
 		axes: [{
 			column: "clonotypeKey",
 			spec: datasetSpec.axesSpec[1]
@@ -440,7 +481,7 @@ wf.body(func(args) {
 		partitionKeyLength: 0
 	}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
 
-	clusterRadiusPf := xsv.importFile(clusteringAnalysis.output("clusterRadius"), "tsv", {
+	clusterRadiusPf := xsv.importFile(clusterResults.output("clusterRadius"), "tsv", {
 		axes: [{
 			column: "clusterId",
 			spec: clusterIdAxisSpec
@@ -490,7 +531,7 @@ wf.body(func(args) {
 	opf = opf.build()
 
 	// Generate pFrames for bubble plot with top clusters
-	abundancesTopPf := xsv.importFile(clusteringAnalysis.output("abundancesTop"), "tsv", {
+	abundancesTopPf := xsv.importFile(clusterResults.output("abundancesTop"), "tsv", {
 			axes: [{
 				column: "sampleId",
 				spec: abundanceSpec.axesSpec[0]
@@ -523,7 +564,7 @@ wf.body(func(args) {
 		}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
 	abundancesTopPf = deanonymizeSampleKeys(abundancesTopPf)
 
-	clusterToSeqTopPf := xsv.importFile(clusteringAnalysis.output("clusterToSeqTop"), "tsv", {
+	clusterToSeqTopPf := xsv.importFile(clusterResults.output("clusterToSeqTop"), "tsv", {
 		axes: [{
 			column: "clusterId",
 			spec: clusterIdAxisSpec
@@ -533,7 +574,7 @@ wf.body(func(args) {
 		partitionKeyLength: 0
 	}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
 
-	clusterRadiusTopPf := xsv.importFile(clusteringAnalysis.output("clusterRadiusTop"), "tsv", {
+	clusterRadiusTopPf := xsv.importFile(clusterResults.output("clusterRadiusTop"), "tsv", {
 		axes: [{
 			column: "clusterId",
 			spec: clusterIdAxisSpec
@@ -606,15 +647,18 @@ wf.body(func(args) {
 		// raw clustering result + the clustering log (surfaced by the UI as "Clustering Log")
 		clustersFile: clustersFile,
 		clusteringLog: clusteringLog,
-		abundances: clusteringAnalysis.output("abundances"),
-		clusterToSeq: clusteringAnalysis.output("clusterToSeq"),
-		cloneToCluster: clusteringAnalysis.output("cloneToCluster"),
-		abundancesPerCluster: clusteringAnalysis.output("abundancesPerCluster"),
-		distanceToCentroid: clusteringAnalysis.output("distanceToCentroid"),
-		clusterRadius: clusteringAnalysis.output("clusterRadius"),
-		clusterToSeqTop: clusteringAnalysis.output("clusterToSeqTop"),
-		clusterRadiusTop: clusteringAnalysis.output("clusterRadiusTop"),
-		abundancesTop: clusteringAnalysis.output("abundancesTop"),
+		// every clustering output is kept, so a later run recovers the clustering instead of re-running it
+		dedupMapping: clusteringAnalysis.output("dedupMapping"),
+		centroidDistances: clusteringAnalysis.output("centroidDistances"),
+		abundances: clusterResults.output("abundances"),
+		clusterToSeq: clusterResults.output("clusterToSeq"),
+		cloneToCluster: clusterResults.output("cloneToCluster"),
+		abundancesPerCluster: clusterResults.output("abundancesPerCluster"),
+		distanceToCentroid: clusterResults.output("distanceToCentroid"),
+		clusterRadius: clusterResults.output("clusterRadius"),
+		clusterToSeqTop: clusterResults.output("clusterToSeqTop"),
+		clusterRadiusTop: clusterResults.output("clusterRadiusTop"),
+		abundancesTop: clusterResults.output("abundancesTop"),
 		isEmpty: isEmpty
 	}
 

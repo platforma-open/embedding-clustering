@@ -21,6 +21,12 @@ export type BlockData = {
   // Re-cluster the HDBSCAN noise pile once to rescue dense sub-groups no larger than the fine cluster
   // scale (larger groups stay noise). On by default; toggleable via a checkbox in Advanced Settings.
   rescueNoise: boolean;
+  // Clusters whose sequence support (percent of members sequence-similar to the reference centroid)
+  // is below this are dissolved into singletons. 0-100; 0 keeps every cluster.
+  minSequenceSupport: number;
+  // Optional maximum cluster size in distinct embeddings. When set, the clustering and the noise rescue never
+  // keep a larger group. Off (undefined) by default.
+  maxClusterSize?: number;
   mem?: number;
   cpu?: number;
   tableState: PlDataTableStateV2;
@@ -38,6 +44,29 @@ export const MAX_MEM_GIB = 1012;
 // A cpu setting clamped to MAX_CPU (undefined stays undefined: the workflow default applies).
 export function clampCpu(cpu: number | undefined): number | undefined {
   return cpu === undefined ? undefined : Math.min(cpu, MAX_CPU);
+}
+
+// Default minimal sequence support, in percent
+export const DEFAULT_MIN_SEQUENCE_SUPPORT = 20;
+
+export function minSequenceSupportError(v: number | undefined): string | undefined {
+  if (v === undefined) return undefined;
+  return Number.isFinite(v) && v >= 0 && v <= 100
+    ? undefined
+    : "Must be a percentage from 0 to 100";
+}
+
+// The maximum cluster size must be a whole number no smaller than the minimum cluster size; undefined = off.
+export function maxClusterSizeError(
+  v: number | undefined,
+  minClusterSize: number,
+): string | undefined {
+  if (v === undefined) return undefined;
+  // An empty minimum cluster size field falls back to 2, the block's default.
+  const floor = Math.max(2, Number.isFinite(minClusterSize) ? minClusterSize : 2);
+  return Number.isInteger(v) && v >= floor
+    ? undefined
+    : `Must be a whole number of at least ${floor} (the minimum cluster size)`;
 }
 
 // Validity rules for the resource settings, shared by the UI fields (red message) and `.args()` (blocks Run):
