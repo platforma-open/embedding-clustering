@@ -129,7 +129,9 @@ seq_of = dict(zip(*clonotypes.join(
     'clonotypeKey', pl.concat_str([pl.col(c).fill_null("") for c in sequence_cols]).alias('seq')
     if sequence_cols else pl.lit("").alias('seq')
 ).get_columns()))
-shares = related_shares(clusters, seq_of)
+# Without source sequences there is nothing to compare: no cluster is scored or dissolved (the workflow then
+# does not import the Sequence Support column).
+shares = related_shares(clusters, seq_of) if sequence_cols else {}
 min_share = args.min_sequence_support / 100.0
 dissolved = {cid for cid, sh in shares.items() if sh < min_share}
 dissolved_reps = set(clusters.filter(pl.col("clusterId").is_in(list(dissolved)))["clonotypeKey"].to_list())
@@ -141,9 +143,12 @@ if dissolved:
         pl.when(pl.col("clusterId").is_in(list(dissolved))).then(pl.col("clonotypeKey"))
         .otherwise(pl.col("clusterId")).alias("clusterId")
     )
-print(f"sequence support: {n_scored} clusters with >= 2 distinct embeddings scored; {len(dissolved)} below the "
-      f"minimum {args.min_sequence_support:g}% dissolved ({len(dissolved_reps)} distinct embeddings released "
-      f"as singletons)")
+if not sequence_cols:
+    print("sequence support: no source sequence columns, not scored")
+else:
+    print(f"sequence support: {n_scored} clusters with >= 2 distinct embeddings scored; {len(dissolved)} below the "
+          f"minimum {args.min_sequence_support:g}% dissolved ({len(dissolved_reps)} distinct embeddings released "
+          f"as singletons)")
 # The singletons a dissolved cluster leaves behind score 1.0 like any other one-embedding cluster.
 kept_shares = {cid: sh for cid, sh in shares.items() if cid not in dissolved}
 cluster_quality = clusters.group_by("clusterId").agg(pl.len().alias("uniqueEmbeddings")).with_columns(

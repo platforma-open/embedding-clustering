@@ -396,19 +396,6 @@ wf.body(func(args) {
 			"Number of distinct embedding vectors in the cluster. Identical sequences share one vector, so this " +
 			"can be much smaller than the cluster size; the maximum cluster size setting counts these.")
 	}, {
-		column: "sequenceSupport",
-		spec: setTableProps({
-			name: "pl7.app/clustering/sequenceSupport",
-			valueType: "Float",
-			annotations: {
-				"pl7.app/min": "0",
-				"pl7.app/max": "1",
-				"pl7.app/format": ".0%"
-			}
-		}, "Sequence Support", true, "2980",
-			"Percentage of the cluster's distinct sequences that resemble the Reference Centroid more than " +
-			"random sequences from the rest of the data do.")
-	}, {
 		column: "clusterLabel",
 		spec: {
 			name: "pl7.app/label",
@@ -419,6 +406,25 @@ wf.body(func(args) {
 			}
 		}
 	}]
+
+	// Sequence support is measured on the source sequences; without them (a run with the check off)
+	// there is no measurement to report.
+	if len(sequencesRef) > 0 {
+		seqColumns = append(seqColumns, {
+			column: "sequenceSupport",
+			spec: setTableProps({
+				name: "pl7.app/clustering/sequenceSupport",
+				valueType: "Float",
+				annotations: {
+					"pl7.app/min": "0",
+					"pl7.app/max": "1",
+					"pl7.app/format": ".0%"
+				}
+			}, "Sequence Support", true, "2980",
+				"Percentage of the cluster's distinct sequences that resemble the Reference Centroid more than " +
+				"random sequences from the rest of the data do.")
+		})
+	}
 
 	// Reference centroid sequence columns (auto-derived source sequences)
 	referenceCentroidDesc := "The real cluster member closest to the other members in embedding space (the medoid)."
