@@ -394,7 +394,7 @@ wf.body(func(args) {
 			valueType: "Int"
 		}, "Cluster Size (no duplicates)", true, "2990",
 			"Number of distinct embedding vectors in the cluster. Identical sequences share one vector, so this " +
-			"can be much smaller than the cluster size; Max Cluster Size counts these.")
+			"can be much smaller than the cluster size; the Max Cluster Size setting counts these.")
 	}, {
 		column: "clusterLabel",
 		spec: {
