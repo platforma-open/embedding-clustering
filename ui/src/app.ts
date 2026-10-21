@@ -49,7 +49,7 @@ export function currentEmbeddingOptions(model: AppModel) {
 function syncDefaultBlockLabel(model: AppModel) {
   // Resolve the human-readable embedding-column label from the result pool (which the pure formatter
   // can't do) and hand it to getDefaultBlockLabel, which owns all label-format logic. Runs in a
-  // reactive effect so the label tracks the picked embedding and minClusterSize.
+  // reactive effect so the label tracks the picked embedding, minClusterSize and minSequenceSupport.
   watchEffect(() => {
     const ref = model.data.embeddingRef;
     const embeddingLabel = ref
@@ -60,6 +60,7 @@ function syncDefaultBlockLabel(model: AppModel) {
     model.data.defaultBlockLabel = getDefaultBlockLabel({
       embeddingLabel,
       minClusterSize: model.data.minClusterSize,
+      minSequenceSupport: model.data.minSequenceSupport,
     });
   });
 }

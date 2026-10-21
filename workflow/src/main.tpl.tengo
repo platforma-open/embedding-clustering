@@ -394,7 +394,7 @@ wf.body(func(args) {
 			valueType: "Int"
 		}, "Cluster Size (no duplicates)", true, "2990",
 			"Number of distinct embedding vectors in the cluster. Identical sequences share one vector, so this " +
-			"can be much smaller than the cluster size; Max Cluster Size counts these.")
+			"can be much smaller than the cluster size; the Max Cluster Size setting counts these.")
 	}, {
 		column: "clusterLabel",
 		spec: {
@@ -420,7 +420,7 @@ wf.body(func(args) {
 					"pl7.app/max": "1",
 					"pl7.app/format": ".0%"
 				}
-			}, "Sequence Agreement", true, "2980",
+			}, "Cluster Sequence Agreement", true, "2980",
 				"Percentage of the cluster's distinct sequences that are more similar to its Reference Centroid " +
 				"than random sequences from other clusters.")
 		})
@@ -630,6 +630,16 @@ wf.body(func(args) {
 	for pf in [abundancesPf, cloneToClusterPf, cloneToClusterLinkPf, clusterToSeqPf, abundancesPerClusterPf, distancesPf, clusterRadiusPf] {
 		for k in maps.getKeys(pf) {
 			v := pf[k]
+			// Cluster Size (no duplicates) is shown in this block's table only.
+			if k == "uniqueEmbeddings" {
+				continue
+			}
+			// Exported under a fixed name, outside the running index, so whether it is present does not
+			// shift the names of the other exports.
+			if k == "sequenceSupport" {
+				epf.add(k, trace.inject(v.spec), v.data)
+				continue
+			}
 			epf.add(k + string(i), trace.inject(v.spec), v.data) // label, specs, data
 			i = i + 1
 		}
