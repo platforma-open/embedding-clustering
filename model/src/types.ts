@@ -90,6 +90,11 @@ export function datasetKey(ref: PlRef | undefined): string {
 // Single source of truth for the auto-subtitle (also the workflow trace label, main.tpl). The UI's
 // syncDefaultBlockLabel (app.ts) only resolves the human-readable embedding-column label from the
 // result pool (which a pure function can't do) and calls this; it owns no format logic.
-export function getDefaultBlockLabel(data: { embeddingLabel: string; minClusterSize: number }) {
-  return `${data.embeddingLabel || "Embedding"}, mcs:${data.minClusterSize}`;
+export function getDefaultBlockLabel(data: {
+  embeddingLabel: string;
+  minClusterSize: number;
+  minSequenceSupport: number;
+}) {
+  // agr = Min Sequence Agreement (%)
+  return `${data.embeddingLabel || "Embedding"}, mcs:${data.minClusterSize}, agr:${data.minSequenceSupport}%`;
 }

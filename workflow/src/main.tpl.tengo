@@ -630,6 +630,16 @@ wf.body(func(args) {
 	for pf in [abundancesPf, cloneToClusterPf, cloneToClusterLinkPf, clusterToSeqPf, abundancesPerClusterPf, distancesPf, clusterRadiusPf] {
 		for k in maps.getKeys(pf) {
 			v := pf[k]
+			// Cluster Size (no duplicates) is shown in this block's table only.
+			if k == "uniqueEmbeddings" {
+				continue
+			}
+			// Exported under a fixed name, outside the running index, so whether it is present does not
+			// shift the names of the other exports.
+			if k == "sequenceSupport" {
+				epf.add(k, trace.inject(v.spec), v.data)
+				continue
+			}
 			epf.add(k + string(i), trace.inject(v.spec), v.data) // label, specs, data
 			i = i + 1
 		}

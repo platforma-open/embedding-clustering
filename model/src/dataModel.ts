@@ -22,6 +22,7 @@ export function initBlockData(params: BlockParams | undefined): BlockData {
     defaultBlockLabel: getDefaultBlockLabel({
       embeddingLabel: "",
       minClusterSize: params?.minClusterSize ?? 2,
+      minSequenceSupport: params?.minSequenceSupport ?? DEFAULT_MIN_SEQUENCE_SUPPORT,
     }),
     customBlockLabel: params?.customBlockLabel ?? "",
     datasetRef: params?.datasetRef,
