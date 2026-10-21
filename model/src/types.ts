@@ -92,9 +92,9 @@ export function datasetKey(ref: PlRef | undefined): string {
 // result pool (which a pure function can't do) and calls this; it owns no format logic.
 export function getDefaultBlockLabel(data: {
   embeddingLabel: string;
-  minClusterSize: number;
-  minSequenceSupport: number;
+  minClusterSize: number | undefined;
+  minSequenceSupport: number | undefined;
 }) {
-  // agr = Min Sequence Agreement (%)
-  return `${data.embeddingLabel || "Embedding"}, mcs:${data.minClusterSize}, agr:${data.minSequenceSupport}%`;
+  // agr = Min Sequence Agreement (%). An empty field runs as the block does: mcs 2, agr 0 (check off).
+  return `${data.embeddingLabel || "Embedding"}, mcs:${data.minClusterSize ?? 2}, agr:${data.minSequenceSupport ?? 0}%`;
 }

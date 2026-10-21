@@ -16,7 +16,7 @@ HDBSCAN is density-based, which is the right fit here: it discovers how many clu
 
 Two refinements handle what density clustering gets wrong on real repertoires. Very large clusters that failed to divide on the first pass are re-clustered internally, so one dominant group resolves into the real sub-groups inside it rather than swallowing the analysis. And the points HDBSCAN leaves as noise are re-clustered once — on by default — to rescue any that form their own small dense groups, no larger than a typical cluster; whatever remains diffuse stays unassigned and becomes its own singleton cluster, so no sequence is silently dropped. Each cluster also gets a Reference Centroid: its medoid, the real member closest to the cluster's center, usable as its representative.
 
-Finally, each cluster is checked against its own sequences. Its Sequence Agreement is the percentage of its distinct sequences that are more similar to its Reference Centroid than random sequences are. Clusters below the Min Sequence Agreement setting are split back into single sequences. This removes clusters with no support in the sequences, which can form where the embedding cannot tell sequences apart. An optional Max Cluster Size, counted in distinct sequences, can cap every cluster instead of re-clustering oversized ones.
+Finally, each cluster is checked against its own sequences. Its Cluster Sequence Agreement is the percentage of its distinct sequences that are more similar to its Reference Centroid than random sequences are. Clusters below the Min Sequence Agreement setting are split back into single sequences. This removes clusters with no support in the sequences, which can form where the embedding cannot tell sequences apart. An optional Max Cluster Size, counted in distinct sequences, can cap every cluster instead of re-clustering oversized ones.
 
 Results are explored as a per-cluster table, a bubble plot of the most abundant clusters, and a cluster size histogram. Cluster assignments become columns, so [Enrichment Analysis](https://github.com/platforma-open/clonotype-enrichment) can measure enrichment per family across selection rounds, and [Lead Selection](https://github.com/platforma-open/antibody-tcr-lead-selection) can diversify a panel across clusters.
 
@@ -84,7 +84,7 @@ Clonotypes with identical embeddings are treated as one sequence, so they always
 
 ### What does Min Sequence Agreement do?
 
-It keeps a cluster only if at least this percentage of its distinct sequences are more similar to its Reference Centroid than random sequences are; other clusters are split back into single sequences. This removes clusters with no support in the sequences, which can form where the embedding cannot tell sequences apart. Lower it, or set it to 0, if you expect functionally related members with very different sequences. Each cluster's value is shown in the Sequence Agreement column.
+It keeps a cluster only if at least this percentage of its distinct sequences are more similar to its Reference Centroid than random sequences are; other clusters are split back into single sequences. This removes clusters with no support in the sequences, which can form where the embedding cannot tell sequences apart. Lower it, or set it to 0, if you expect functionally related members with very different sequences. Each cluster's value is shown in the Cluster Sequence Agreement column.
 
 ### What does the Max Cluster Size do?
 
