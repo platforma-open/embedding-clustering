@@ -26,6 +26,7 @@ export function initBlockData(params: BlockParams | undefined): BlockData {
     }),
     customBlockLabel: params?.customBlockLabel ?? "",
     datasetRef: params?.datasetRef,
+    filterRef: params?.filterRef,
     embeddingRef: params?.embeddingRef,
     sequencesRef: params?.sequencesRef ?? [],
     minClusterSize: params?.minClusterSize ?? 2, // HDBSCAN; fixed small default, not scaled with N

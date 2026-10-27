@@ -2,7 +2,14 @@
   "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
+  "fixed": [
+    [
+      "@platforma-open/milaboratories.embedding-clustering",
+      "@platforma-open/milaboratories.embedding-clustering.model",
+      "@platforma-open/milaboratories.embedding-clustering.ui",
+      "@platforma-open/milaboratories.embedding-clustering.workflow"
+    ]
+  ],
   "linked": [],
   "access": "restricted",
   "baseBranch": "main",

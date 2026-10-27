@@ -14,6 +14,7 @@ anonymize := import("@platforma-sdk/workflow-tengo:anonymize")
 
 text := import("text")
 math := import("math")
+json := import("json")
 
 emptyCheckTpl := assets.importTemplate(":empty-check")
 anonymizationTpl := assets.importTemplate(":anonymization")
@@ -40,10 +41,39 @@ setTableProps := func(spec, label, visibility, orderPriority, ...description) {
 	})
 }
 
+// A TSV builder restricted to the rows of an optional subset column. Without one it is the plain
+// xsv builder. With one, every column is its own filtered primary, full-joined as the plain one is.
+newTableBuilder := func(filterColumn) {
+	if is_undefined(filterColumn) {
+		return pframes.tsvFileBuilder()
+	}
+	tb := pframes.tableBuilder("tsv").setJoinMode("full")
+	nColumns := 0
+	return {
+		add: func(column, opts) {
+			tb.addPrimary("col" + string(nColumns), {
+				__isPrimaryRef: "v1",
+				column: column,
+				filter: filterColumn
+				}, opts)
+			nColumns += 1
+		},
+		setAxisHeader: func(matcher, header) { tb.setAxisHeader(matcher, header) },
+		mem: func(amount) { tb.mem(amount) },
+		cpu: func(amount) { tb.cpu(amount) },
+		build: func() { return tb.build() }
+	}
+}
+
 wf.prepare(func(args) {
 	bundleBuilder := wf.createPBundleBuilder()
 	bundleBuilder.ignoreMissingDomains() // to make query work for both bulk and single cell data
 	bundleBuilder.addAnchor("main", args.datasetRef)
+
+	// Optional subset column picked alongside the dataset (PlDatasetSelector)
+	if !is_undefined(args.inputFilter) {
+		bundleBuilder.addRef(json.decode(args.inputFilter))
+	}
 
 	// abundance
 	bundleBuilder.addSingle({
@@ -97,6 +127,13 @@ wf.body(func(args) {
 	defaultConvMem := string(int(math.max(16, baseMemGiB / 8))) + "GiB"
 	defaultConvCpu := 1
 
+	// Optional subset filter; the embedding matrix and the clone table keep only its clonotypes, so
+	// only they are clustered
+	filterColumn := undefined
+	if !is_undefined(args.inputFilter) {
+		filterColumn = columns.getColumn(json.decode(args.inputFilter))
+	}
+
 	// embedding column resolved in prepare
 	embeddingCol := args.resolvedEmbedding
 	embSpec := embeddingCol.spec
@@ -117,10 +154,30 @@ wf.body(func(args) {
 			strippedAxis(embSpec.axesSpec[1], "embeddingDim")
 		]
 	}
-	embeddingMatrix := xsv.exportFrame([{ spec: strippedEmbSpec, data: embeddingCol.data }], "parquet", {
-		mem: string(int(math.max(16, baseMemGiB / 4))) + "GiB",
-		cpu: 4
-	})
+	embeddingMatrixMem := string(int(math.max(16, baseMemGiB / 4))) + "GiB"
+	embeddingMatrix := undefined
+	if is_undefined(filterColumn) {
+		embeddingMatrix = xsv.exportFrame([{ spec: strippedEmbSpec, data: embeddingCol.data }], "parquet", {
+			mem: embeddingMatrixMem,
+			cpu: 4
+		})
+	} else {
+		// The filter joins on the dataset's clonotype axis, so axis 0 takes that axis's domain
+		filterableEmbSpec := maps.clone(strippedEmbSpec)
+		filterableEmbSpec.axesSpec = [
+			maps.deepMerge(strippedEmbSpec.axesSpec[0], { domain: datasetSpec.axesSpec[1].domain }),
+			strippedEmbSpec.axesSpec[1]
+		]
+		matrixBuilder := pframes.tableBuilder("parquet")
+		matrixBuilder.addPrimary("embedding", {
+			__isPrimaryRef: "v1",
+			column: { spec: filterableEmbSpec, data: embeddingCol.data },
+			filter: filterColumn
+		})
+		matrixBuilder.mem(embeddingMatrixMem)
+		matrixBuilder.cpu(4)
+		embeddingMatrix = matrixBuilder.build()
+	}
 
 	// Check if the embedding matrix the clustering consumes is empty
 	emptyCheckAnalysis := render.create(emptyCheckTpl, {
@@ -141,7 +198,7 @@ wf.body(func(args) {
 	mappingRef := anonymizationResult.output("mapping")
 
 	// clone table
-	cloneTableBuilder := pframes.tsvFileBuilder()
+	cloneTableBuilder := newTableBuilder(filterColumn)
 	cloneTableBuilder.add({ spec: abundanceColumn.spec, data: anonymizedAbundanceData }, {header: "abundance"})
 	for nr, seq in sequencesRef {
 		cloneTableBuilder.add(columns.getColumn(seq), {header: "sequence_" + string(nr)})
@@ -211,6 +268,11 @@ wf.body(func(args) {
 	}
 	if !is_undefined(embeddingModel) {
 		clusterDomain["pl7.app/embedding/model"] = embeddingModel
+	}
+	// A subset run stamps the subset on the cluster axis and the distance column, so they say they
+	// cover only the subset
+	if !is_undefined(filterColumn) {
+		clusterDomain["pl7.app/inputSubset"] = args.inputFilter
 	}
 
 	clusterIdAxisSpec := {
@@ -515,8 +577,13 @@ wf.body(func(args) {
 	if traceLabel == "" {
 		traceLabel = args.defaultBlockLabel
 	}
+	// A subset run roots the trace in the filter (dataset -> the block that made the subset)
+	traceSpec := abundanceSpec
+	if !is_undefined(filterColumn) {
+		traceSpec = filterColumn.spec
+	}
 	trace := pSpec.makeTrace(
-		abundanceSpec,
+		traceSpec,
 		{
 			type: "milaboratories.embedding-clustering.clustering",
 			importance: 30,

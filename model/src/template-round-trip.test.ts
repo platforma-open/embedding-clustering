@@ -27,6 +27,7 @@ const CONFIGURED: BlockData = {
   defaultBlockLabel: "ESM2 embedding, mcs:5",
   customBlockLabel: "run 7 clusters",
   datasetRef: { __isRef: true, blockId: "b1", name: "pf/dataset" },
+  filterRef: { __isRef: true, blockId: "b3", name: "pf/subset" },
   embeddingRef: { __isRef: true, blockId: "b2", name: "pf/embedding" },
   sequencesRef: ANCHORED_IDS,
   minClusterSize: 5,
@@ -46,6 +47,7 @@ describe("export -> apply", () => {
     const seeded = roundTrip(CONFIGURED);
 
     expect(seeded.datasetRef).toEqual(CONFIGURED.datasetRef);
+    expect(seeded.filterRef).toEqual(CONFIGURED.filterRef);
     expect(seeded.embeddingRef).toEqual(CONFIGURED.embeddingRef);
     expect(seeded.sequencesRef).toEqual(CONFIGURED.sequencesRef);
     expect(seeded.minClusterSize).toBe(CONFIGURED.minClusterSize);
