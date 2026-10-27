@@ -447,12 +447,15 @@ def _subcluster(store, gpos, idx, D, min_cluster_size, min_samples, pca_cap, max
 
 
 def run_clustering(Xr, keys, copies, n_clonotypes, D, k, pf, key_col, dim_col, value_col, workdir,
-                   min_cluster_size=2, min_samples=5, pca_cap=500, exact_max=4000, rescue_noise=False):
+                   min_cluster_size=2, min_samples=5, pca_cap=500, exact_max=4000, rescue_noise=False,
+                   max_cluster_size=None):
     """Pure-ish core, on REPRESENTATIVES only (one row per distinct reduced vector). Xr: (M, k) globally-reduced
     representative matrix. keys: (M,) representative clonotype keys. copies: (M,) how many clonotypes share
     each representative's vector. n_clonotypes: total clonotypes (for the stats only).
     pf + *_col + D let refinement re-read the ORIGINAL vectors it needs (see build_refined_store).
     rescue_noise: if True, re-cluster the main-pass noise pile once to rescue dense sub-groups.
+    max_cluster_size: if set, EOM's size cap (in distinct embeddings) for the initial pass, and an upper limit on
+    the noise rescue's own cap; no cluster above it is kept, so the MAIN split of oversized clusters is skipped.
     Refinement thresholds and medoids count representatives, not copies: identical clonotypes are one entity.
     Returns a dict:
       rep_keys           (M,)   representative keys (== keys)
@@ -492,7 +495,8 @@ def run_clustering(Xr, keys, copies, n_clonotypes, D, k, pf, key_col, dim_col, v
         log(f"step: initial HDBSCAN (eom, min_cluster_size={min_cluster_size}, min_samples={min_samples}) "
             f"on {int(valid.sum())} representative vectors (PCA k={k}, {numba.get_num_threads()} threads) ...")
         t0 = time.time()
-        labels[valid], probs[valid] = hdbscan_fit(Xn[valid], min_cluster_size, min_samples)
+        cap = np.inf if max_cluster_size is None else max_cluster_size
+        labels[valid], probs[valid] = hdbscan_fit(Xn[valid], min_cluster_size, min_samples, cap)
         log(f"  HDBSCAN done in {time.time() - t0:.1f}s (peak RSS {_peak_rss_gib():.2f} GiB)")
 
     # --- Recursive refinement --------------------------------------------------------------------
@@ -523,6 +527,8 @@ def run_clustering(Xr, keys, copies, n_clonotypes, D, k, pf, key_col, dim_col, v
     # Noise-rescue size cap
     p99_bound = p99 if main_sizes.size else float("inf")
     noise_max_cluster_size = int(min(p99_bound, max(noise_cap, 2 * min_cluster_size)))
+    if max_cluster_size is not None:              # a user cap can only lower the derived noise-rescue cap
+        noise_max_cluster_size = int(min(noise_max_cluster_size, max_cluster_size))
     main_cluster_ids = [int(c) for c in np.unique(labels) if c != -1]   # snapshot BEFORE rescue/splitting
     next_id = [int(labels.max()) + 1 if (labels >= 0).any() else 0]
     p99_text = str(p99) if main_sizes.size else "n/a"
@@ -535,6 +541,8 @@ def run_clustering(Xr, keys, copies, n_clonotypes, D, k, pf, key_col, dim_col, v
     # those originals, then run refinement against that store.
     cluster_sizes = np.bincount(labels[labels >= 0])   # one pass
     oversized_main = [c for c in main_cluster_ids if cluster_sizes[c] > main_split_threshold]
+    if max_cluster_size is not None:              # the capped initial pass leaves nothing oversized to split
+        oversized_main = []
     refined_mask = (labels == -1) if rescue_noise else np.zeros(M, dtype=bool)
     for c in oversized_main:
         refined_mask |= (labels == c)
@@ -545,8 +553,8 @@ def run_clustering(Xr, keys, copies, n_clonotypes, D, k, pf, key_col, dim_col, v
 
     def split_recursive(member_idx, depth, threshold):
         """Re-cluster member_idx (global rows) on a subset-local re-PCA. If it splits into >=2
-        sub-clusters: relabel each with a fresh id (recursing into any child still > threshold, up to
-        max_depth) and send leftover sub-noise to -1 (final singletons, not re-clustered). If it does
+        sub-clusters: relabel each with a fresh id (recursing, up to max_depth, into any child still > threshold
+        or holding more than half of member_idx while above split_floor) and send leftover sub-noise to -1 (final singletons, not re-clustered). If it does
         NOT split (<2 sub-clusters) leave member_idx unchanged. Returns #sub-clusters (0 = no split)."""
         sub_lab, sub_prob = _subcluster(store, gpos, member_idx, D, min_cluster_size, min_samples, pca_cap)
         found = list(cluster_groups(sub_lab))           # (sub-cluster id, positions within member_idx)
@@ -557,7 +565,12 @@ def run_clustering(Xr, keys, copies, n_clonotypes, D, k, pf, key_col, dim_col, v
         probs[leftover] = 0.0
         for _, pos in found:
             rows = member_idx[pos]
-            if len(rows) > threshold and depth < max_depth and split_recursive(rows, depth + 1, threshold) > 0:
+            # Re-split a child that is still above the threshold, or that kept most of its parent (the split
+            # did not really divide it: the threshold, taken from the initial pass, can sit just above it) and
+            # is still larger than split_floor.
+            kept_most = (len(rows) > len(member_idx) // 2) and len(rows) > split_floor
+            oversized = len(rows) > threshold or kept_most
+            if oversized and depth < max_depth and split_recursive(rows, depth + 1, threshold) > 0:
                 continue                                # children already relabeled by the recursive call
             labels[rows] = next_id[0]
             probs[rows] = sub_prob[pos]
@@ -579,6 +592,8 @@ def run_clustering(Xr, keys, copies, n_clonotypes, D, k, pf, key_col, dim_col, v
                 if split_recursive(np.where(labels == cid)[0], 0, main_split_threshold) > 0:
                     n_main_split += 1
             log(f"  MAIN split -> {n_main_split} cluster(s) split")
+        elif max_cluster_size is not None:
+            log(f"step: max cluster size {max_cluster_size} set -- clusters are capped, no MAIN split")
         else:
             log(f"step: no MAIN cluster exceeds the huge-outlier threshold {main_split_threshold}; "
                 f"main clusters left as-is")
@@ -681,6 +696,9 @@ def main():
     ap.add_argument("--dims", type=int, default=None,
                     help="embedding vector length D, from the input column's pl7.app/embedding/length "
                          "annotation; when omitted D is inferred as max(embeddingDim)+1")
+    ap.add_argument("--max-cluster-size", type=int, default=None,
+                    help="maximum cluster size in distinct embeddings, applied to the initial clustering and as an "
+                         "upper limit for the noise rescue; replaces the split of oversized clusters (off by default)")
     ap.add_argument("--rescue-noise", action="store_true",
                     help="re-cluster the HDBSCAN noise pile once to rescue dense sub-groups "
                          "(only groups up to the fine cluster scale are kept; larger groups stay noise)")
@@ -689,6 +707,9 @@ def main():
                          "host has fewer cores); the result depends on this number, so keep it fixed to "
                          "reproduce a run")
     args = ap.parse_args()
+    if args.max_cluster_size is not None and args.max_cluster_size < args.min_cluster_size:
+        ap.error(f"--max-cluster-size ({args.max_cluster_size}) must be at least --min-cluster-size "
+                 f"({args.min_cluster_size})")
 
     # Never more threads than numba allows on this host (NUMBA_NUM_THREADS, default: all host cores).
     threads = max(1, min(args.threads, numba.config.NUMBA_NUM_THREADS))
@@ -722,12 +743,14 @@ def main():
     res = run_clustering(Xu, keys_u, copies, keys.shape[0], D, k, pf, args.key_col, args.dim_col,
                          args.value_col, workdir,
                          min_cluster_size=args.min_cluster_size, min_samples=args.min_samples,
-                         pca_cap=args.pca_cap, rescue_noise=args.rescue_noise)
+                         pca_cap=args.pca_cap, rescue_noise=args.rescue_noise,
+                         max_cluster_size=args.max_cluster_size)
     s = res["stats"]
     log(f"clonotypes={s['N']}, distinct vectors={s['n_unique']}, PCA k={s['k_pca']}, "
         f"clusters={s['n_clusters']} (initial {s['n_clusters_initial']}, "
         f"+{s['n_identical_rescued']} identical groups, "
         f"+{s['n_clusters_from_noise']} rescued from noise [rescue={args.rescue_noise}]; "
+        f"max cluster size {args.max_cluster_size if args.max_cluster_size is not None else 'off'}; "
         f"MAIN split {s['n_main_split']} at >{s['main_split_threshold']}, "
         f"noise-rescue max cluster size {s['noise_max_cluster_size']}), "
         f"noise={s['noise_fraction']:.1%} of distinct vectors, degenerate={s['n_degenerate']}")

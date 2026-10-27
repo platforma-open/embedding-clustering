@@ -3,7 +3,7 @@ import { createPlDataTableStateV2, DataModelBuilder } from "@platforma-sdk/model
 import type { BlockParams } from "@platforma-open/milaboratories.embedding-clustering.kind";
 import { kind } from "@platforma-open/milaboratories.embedding-clustering.kind";
 import type { BlockData } from "./types";
-import { clampCpu, getDefaultBlockLabel } from "./types";
+import { clampCpu, DEFAULT_MIN_SEQUENCE_SUPPORT, getDefaultBlockLabel } from "./types";
 
 /**
  * The state a new block starts in, from the params a template handed it.
@@ -22,6 +22,7 @@ export function initBlockData(params: BlockParams | undefined): BlockData {
     defaultBlockLabel: getDefaultBlockLabel({
       embeddingLabel: "",
       minClusterSize: params?.minClusterSize ?? 2,
+      minSequenceSupport: params?.minSequenceSupport ?? DEFAULT_MIN_SEQUENCE_SUPPORT,
     }),
     customBlockLabel: params?.customBlockLabel ?? "",
     datasetRef: params?.datasetRef,
@@ -30,6 +31,8 @@ export function initBlockData(params: BlockParams | undefined): BlockData {
     sequencesRef: params?.sequencesRef ?? [],
     minClusterSize: params?.minClusterSize ?? 2, // HDBSCAN; fixed small default, not scaled with N
     rescueNoise: params?.rescueNoise ?? true,
+    minSequenceSupport: params?.minSequenceSupport ?? DEFAULT_MIN_SEQUENCE_SUPPORT,
+    maxClusterSize: params?.maxClusterSize,
     mem: params?.mem,
     cpu: clampCpu(params?.cpu), // a template may carry more than MAX_CPU
     tableState: createPlDataTableStateV2(),
@@ -66,4 +69,9 @@ export const blockDataModel = new DataModelBuilder({ kind })
   .from<BlockData>("v1")
   // v2: the clustering step uses at most MAX_CPU cores; clamp a larger cpu saved by an earlier version.
   .migrate<BlockData>("v2", (v1) => ({ ...v1, cpu: clampCpu(v1.cpu) }))
+  // v3: the minimal sequence support filter (maximum cluster size stays off: undefined).
+  .migrate<BlockData>("v3", (v2) => ({
+    ...v2,
+    minSequenceSupport: v2.minSequenceSupport ?? DEFAULT_MIN_SEQUENCE_SUPPORT,
+  }))
   .init(({ params }) => initBlockData(params));

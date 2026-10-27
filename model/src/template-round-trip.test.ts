@@ -4,6 +4,7 @@ import { createPlDataTableStateV2 } from "@platforma-sdk/model";
 import { initBlockData } from "./dataModel";
 import { deriveTemplateParams } from "./templateParams";
 import type { BlockData } from "./types";
+import { DEFAULT_MIN_SEQUENCE_SUPPORT } from "./types";
 
 /**
  * The three steps a project template actually takes between two blocks: the source block's
@@ -31,6 +32,8 @@ const CONFIGURED: BlockData = {
   sequencesRef: ANCHORED_IDS,
   minClusterSize: 5,
   rescueNoise: false,
+  minSequenceSupport: 40,
+  maxClusterSize: 30,
   mem: 128,
   cpu: 8,
   tableState: createPlDataTableStateV2(),
@@ -49,6 +52,8 @@ describe("export -> apply", () => {
     expect(seeded.sequencesRef).toEqual(CONFIGURED.sequencesRef);
     expect(seeded.minClusterSize).toBe(CONFIGURED.minClusterSize);
     expect(seeded.rescueNoise).toBe(CONFIGURED.rescueNoise);
+    expect(seeded.minSequenceSupport).toBe(CONFIGURED.minSequenceSupport);
+    expect(seeded.maxClusterSize).toBe(CONFIGURED.maxClusterSize);
     expect(seeded.mem).toBe(CONFIGURED.mem);
     expect(seeded.cpu).toBe(CONFIGURED.cpu);
     expect(seeded.customBlockLabel).toBe(CONFIGURED.customBlockLabel);
@@ -82,6 +87,8 @@ describe("export -> apply", () => {
 
     expect(fresh.minClusterSize).toBe(2);
     expect(fresh.rescueNoise).toBe(true);
+    expect(fresh.minSequenceSupport).toBe(DEFAULT_MIN_SEQUENCE_SUPPORT);
+    expect(fresh.maxClusterSize).toBeUndefined();
     expect(fresh.sequencesRef).toEqual([]);
     expect(fresh.customBlockLabel).toBe("");
     expect(fresh.datasetRef).toBeUndefined();

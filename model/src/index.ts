@@ -17,7 +17,13 @@ import {
 import { kind } from "@platforma-open/milaboratories.embedding-clustering.kind";
 import { blockDataModel } from "./dataModel";
 import { deriveTemplateParams } from "./templateParams";
-import { cpuError, memError, selectionKey } from "./types";
+import {
+  cpuError,
+  maxClusterSizeError,
+  memError,
+  minSequenceSupportError,
+  selectionKey,
+} from "./types";
 
 export type * from "@milaboratories/helpers";
 export type * from "@platforma-open/milaboratories.embedding-clustering.kind";
@@ -27,10 +33,13 @@ export {
   clampCpu,
   cpuError,
   datasetKey,
+  DEFAULT_MIN_SEQUENCE_SUPPORT,
   getDefaultBlockLabel,
   MAX_CPU,
   MAX_MEM_GIB,
+  maxClusterSizeError,
   memError,
+  minSequenceSupportError,
   selectionKey,
 } from "./types";
 export { blockDataModel, initBlockData } from "./dataModel";
@@ -66,14 +75,27 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
       throw new Error(
         "Connect a Sequence Embeddings output and pick an embedding column to cluster by embedding distance",
       );
+    // The sequence support check compares the sequences the embedding was computed from; without them
+    // every cluster would fail it. The UI derives them from the embedding (and fills them in once its
+    // options load), so an empty list means they are still loading or could not be found. With the
+    // check off (0) the block runs without them.
+    if (data.minSequenceSupport > 0 && (data.sequencesRef?.length ?? 0) === 0)
+      throw new Error(
+        "The source sequence column of the selected embedding was not found. If this persists after a few seconds, pick another embedding or set Min Sequence Agreement to 0.",
+      );
     // The number fields show these errors but still store the value; keep Run blocked until it is fixed.
     const cpuMsg = cpuError(data.cpu);
     if (cpuMsg) throw new Error(`CPU (cores): ${cpuMsg}`);
     const memMsg = memError(data.mem);
     if (memMsg) throw new Error(`Memory (GiB): ${memMsg}`);
+    const shareMsg = minSequenceSupportError(data.minSequenceSupport);
+    if (shareMsg) throw new Error(`Min Sequence Agreement (%): ${shareMsg}`);
+    const maxMsg = maxClusterSizeError(data.maxClusterSize, data.minClusterSize);
+    if (maxMsg) throw new Error(`Max Cluster Size: ${maxMsg}`);
 
-    // sequencesRef is auto-derived from the embedding column (for centroid/MSA display) and may be
-    // empty; the embedding model is read from the column spec in the workflow, not snapshotted here.
+    // sequencesRef is auto-derived from the embedding column (centroid/MSA display and the sequence
+    // support check; checked non-empty above); the embedding model is read from the column spec in the
+    // workflow, not snapshotted here.
     return {
       defaultBlockLabel: data.defaultBlockLabel,
       customBlockLabel: data.customBlockLabel,
@@ -82,6 +104,8 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
       embeddingRef: data.embeddingRef,
       minClusterSize: data.minClusterSize,
       rescueNoise: data.rescueNoise,
+      minSequenceSupport: data.minSequenceSupport,
+      maxClusterSize: data.maxClusterSize,
       mem: data.mem,
       cpu: data.cpu,
       // The subset's canonical column id, stamped by the workflow as `pl7.app/inputSubset`
@@ -285,11 +309,16 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
     // holds the previous dataset's list for a few seconds, and the UI must not offer it.
     return {
       forDataset: selectionKey(ref, ctx.data.filterRef),
-      options: options.map((o) => ({
-        ref: o.ref,
-        label: o.label,
-        feature: ctx.resultPool.getPColumnSpecByRef(o.ref)?.domain?.["pl7.app/feature"],
-      })),
+      options: options.map((o) => {
+        const domain = ctx.resultPool.getPColumnSpecByRef(o.ref)?.domain;
+        return {
+          ref: o.ref,
+          label: o.label,
+          feature: domain?.["pl7.app/feature"],
+          // Single-chain VDJ embeddings carry their chain (A / B); peptide, Fv and scFv ones do not.
+          chain: domain?.["pl7.app/vdj/scClonotypeChain"],
+        };
+      }),
     };
   })
 

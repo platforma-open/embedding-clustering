@@ -123,6 +123,8 @@ describe("the params envelope", () => {
       sequencesRef: [ANCHORED_ID],
       minClusterSize: 5,
       rescueNoise: false,
+      minSequenceSupport: 30,
+      maxClusterSize: 50,
       mem: 128,
       cpu: 16,
       customBlockLabel: "ESM2, mcs:5",
