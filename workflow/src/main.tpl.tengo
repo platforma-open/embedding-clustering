@@ -290,7 +290,8 @@ wf.body(func(args) {
 		name: abundanceSpec.name,
 		valueType: abundanceSpec.valueType,
 		domain: abundanceSpec.domain,
-		annotations: abundanceSpec.annotations
+		// Cluster columns are not the dataset's anchor abundance.
+		annotations: maps.filter(abundanceSpec.annotations, func(k, v) { return k != "pl7.app/isAnchor" })
 	}
 
 	abundanceLabel := abundanceSpec.annotations["pl7.app/label"]
