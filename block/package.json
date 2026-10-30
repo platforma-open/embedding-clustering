@@ -1,6 +1,6 @@
 {
   "name": "@platforma-open/milaboratories.embedding-clustering",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "files": [
     "dist",
     "block-pack"
