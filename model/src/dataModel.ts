@@ -73,7 +73,7 @@ export const blockDataModel = new DataModelBuilder({ kind })
     minSequenceSupport: v2.minSequenceSupport ?? DEFAULT_MIN_SEQUENCE_SUPPORT,
   }))
   // v4: the old label mixed the embedding column's result-pool label with settings; the settings
-  // part is recomputed from data, and the column part returns on the next embedding pick.
+  // part is recomputed from data, and the column part returns once the block is opened.
   .migrate<BlockData>("v4", ({ defaultBlockLabel: _, ...rest }) => ({
     ...rest,
     subtitleLabel: "",

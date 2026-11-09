@@ -1,7 +1,7 @@
 import { selectionKey, platforma } from "@platforma-open/milaboratories.embedding-clustering.model";
 import type { PlRef, SUniversalPColumnId } from "@platforma-sdk/model";
 import { defineAppV3 } from "@platforma-sdk/ui-vue";
-import { watchEffect } from "vue";
+import { computed, watch, watchEffect } from "vue";
 import BubblePlotPage from "./pages/BubblePlotPage.vue";
 import HistogramPage from "./pages/HistogramPage.vue";
 import MainPage from "./pages/MainPage.vue";
@@ -11,6 +11,7 @@ export const sdkPlugin = defineAppV3(platforma, (app) => {
   // Default-guard for projects saved before the noise-rescue toggle existed (ON by default).
   app.model.data.rescueNoise ??= true;
 
+  syncSubtitleLabel(app.model);
   reconcileEmbeddingSelection(app.model);
   fillSourceSequences(app.model);
 
@@ -44,15 +45,26 @@ export function currentEmbeddingOptions(model: AppModel) {
   return result.options;
 }
 
-// The subtitle names the chosen embedding column as the result pool labels it. Called only from the
-// pickers' setters, so reopening the block never rewrites it.
-export function refreshSubtitleLabel(model: AppModel) {
-  const ref = model.data.embeddingRef;
-  model.data.subtitleLabel = ref
-    ? (currentEmbeddingOptions(model)?.find(
-        (o) => o.ref.blockId === ref.blockId && o.ref.name === ref.name,
-      )?.label ?? "")
-    : "";
+// The subtitle names the chosen embedding column as the result pool labels it: "" when none is
+// chosen, undefined while the chosen embedding's option is not loaded yet.
+function syncSubtitleLabel(model: AppModel) {
+  const subtitleLabel = computed<string | undefined>(() => {
+    const ref = model.data.embeddingRef;
+    if (!ref) return "";
+    return currentEmbeddingOptions(model)?.find(
+      (o) => o.ref.blockId === ref.blockId && o.ref.name === ref.name,
+    )?.label;
+  });
+
+  watch(
+    subtitleLabel,
+    (label) => {
+      if (label !== undefined && label !== model.data.subtitleLabel) {
+        model.data.subtitleLabel = label;
+      }
+    },
+    { immediate: true },
+  );
 }
 
 function reconcileEmbeddingSelection(model: AppModel) {

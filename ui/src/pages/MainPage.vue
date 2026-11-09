@@ -40,7 +40,7 @@ import {
   usePlDataTableSettingsV2,
 } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
-import { currentEmbeddingOptions, deriveSourceSeqRefs, refreshSubtitleLabel, useApp } from "../app";
+import { currentEmbeddingOptions, deriveSourceSeqRefs, useApp } from "../app";
 
 const app = useApp();
 
@@ -96,7 +96,6 @@ const datasetSelection = computed<DatasetSelection | undefined>({
     if (datasetKey(prev) !== datasetKey(next)) {
       app.model.data.embeddingRef = undefined;
       app.model.data.sequencesRef = [];
-      refreshSubtitleLabel(app.model);
     }
   },
 });
@@ -114,7 +113,6 @@ const isSequenceColumn = (column: PColumnIdAndSpec) =>
 function onEmbeddingRefChange(ref?: PlRef) {
   app.model.data.embeddingRef = ref;
   app.model.data.sequencesRef = ref ? deriveSourceSeqRefs(app.model, ref) : [];
-  refreshSubtitleLabel(app.model);
 }
 
 // Set instructions to track cluster axis

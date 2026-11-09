@@ -8,8 +8,8 @@ import type {
 
 export type BlockData = {
   customBlockLabel: string;
-  // Label of the chosen embedding column as the result pool shows it. Written by the pickers on a
-  // user pick; feeds the subtitle only, never the workflow.
+  // Label of the chosen embedding column as the result pool shows it, kept in sync by the UI;
+  // feeds the subtitle only, never the workflow.
   subtitleLabel?: string;
   datasetRef?: PlRef;
   // Subset column picked with the dataset in PlDatasetSelector (e.g. a Repertoire Labeling label).

@@ -12,7 +12,7 @@ import type { BlockData } from "./types";
  *
  * `subtitleLabel` does not travel. It is the embedding column's option label, which comes from
  * the result pool of the source project; a seeded block shows the settings part of its subtitle
- * until the user picks an embedding.
+ * until the block is opened.
  */
 export function deriveTemplateParams(data: BlockData): BlockParams {
   return {
