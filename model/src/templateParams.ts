@@ -10,9 +10,9 @@ import type { BlockData } from "./types";
  * template without it would seed a block whose output has a different shape than the one it was
  * exported from.
  *
- * `defaultBlockLabel` does not travel. A `watchEffect` in `ui/src/app.ts` derives it from the
- * embedding column's option label, which comes from the result pool — so it is projected into
- * args, where the workflow reads it for the trace, but never templated.
+ * `subtitleLabel` does not travel. It is the embedding column's option label, which comes from
+ * the result pool of the source project; a seeded block shows the settings part of its subtitle
+ * until the user picks an embedding.
  */
 export function deriveTemplateParams(data: BlockData): BlockParams {
   return {

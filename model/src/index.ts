@@ -19,6 +19,8 @@ import { blockDataModel } from "./dataModel";
 import { deriveTemplateParams } from "./templateParams";
 import {
   cpuError,
+  defaultSubtitle,
+  labelFromParams,
   maxClusterSizeError,
   memError,
   minSequenceSupportError,
@@ -34,7 +36,7 @@ export {
   cpuError,
   datasetKey,
   DEFAULT_MIN_SEQUENCE_SUPPORT,
-  getDefaultBlockLabel,
+  defaultSubtitle,
   MAX_CPU,
   MAX_MEM_GIB,
   maxClusterSizeError,
@@ -97,8 +99,8 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
     // support check; checked non-empty above); the embedding model is read from the column spec in the
     // workflow, not snapshotted here.
     return {
-      defaultBlockLabel: data.defaultBlockLabel,
       customBlockLabel: data.customBlockLabel,
+      paramsLabel: labelFromParams(data),
       datasetRef: data.datasetRef,
       sequencesRef: data.sequencesRef,
       embeddingRef: data.embeddingRef,
@@ -441,7 +443,7 @@ export const platforma = BlockModelV3.create({ dataModel: blockDataModel, kind }
 
   .title(() => "Embedding Clustering")
 
-  .subtitle((ctx) => ctx.data.customBlockLabel || ctx.data.defaultBlockLabel)
+  .subtitle((ctx) => ctx.data.customBlockLabel || defaultSubtitle(ctx.data))
 
   .sections((_ctx) => [
     { type: "link", href: "/", label: strings.titles.main },

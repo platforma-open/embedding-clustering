@@ -1,8 +1,4 @@
-import {
-  getDefaultBlockLabel,
-  selectionKey,
-  platforma,
-} from "@platforma-open/milaboratories.embedding-clustering.model";
+import { selectionKey, platforma } from "@platforma-open/milaboratories.embedding-clustering.model";
 import type { PlRef, SUniversalPColumnId } from "@platforma-sdk/model";
 import { defineAppV3 } from "@platforma-sdk/ui-vue";
 import { watchEffect } from "vue";
@@ -15,7 +11,6 @@ export const sdkPlugin = defineAppV3(platforma, (app) => {
   // Default-guard for projects saved before the noise-rescue toggle existed (ON by default).
   app.model.data.rescueNoise ??= true;
 
-  syncDefaultBlockLabel(app.model);
   reconcileEmbeddingSelection(app.model);
   fillSourceSequences(app.model);
 
@@ -49,23 +44,15 @@ export function currentEmbeddingOptions(model: AppModel) {
   return result.options;
 }
 
-function syncDefaultBlockLabel(model: AppModel) {
-  // Resolve the human-readable embedding-column label from the result pool (which the pure formatter
-  // can't do) and hand it to getDefaultBlockLabel, which owns all label-format logic. Runs in a
-  // reactive effect so the label tracks the picked embedding, minClusterSize and minSequenceSupport.
-  watchEffect(() => {
-    const ref = model.data.embeddingRef;
-    const embeddingLabel = ref
-      ? (currentEmbeddingOptions(model)?.find(
-          (o) => o.ref.blockId === ref.blockId && o.ref.name === ref.name,
-        )?.label ?? "Embedding")
-      : "Embedding";
-    model.data.defaultBlockLabel = getDefaultBlockLabel({
-      embeddingLabel,
-      minClusterSize: model.data.minClusterSize,
-      minSequenceSupport: model.data.minSequenceSupport,
-    });
-  });
+// The subtitle names the chosen embedding column as the result pool labels it. Called only from the
+// pickers' setters, so reopening the block never rewrites it.
+export function refreshSubtitleLabel(model: AppModel) {
+  const ref = model.data.embeddingRef;
+  model.data.subtitleLabel = ref
+    ? (currentEmbeddingOptions(model)?.find(
+        (o) => o.ref.blockId === ref.blockId && o.ref.name === ref.name,
+      )?.label ?? "")
+    : "";
 }
 
 function reconcileEmbeddingSelection(model: AppModel) {

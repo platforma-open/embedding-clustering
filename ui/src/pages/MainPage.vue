@@ -5,6 +5,7 @@ import {
   cpuError,
   datasetKey,
   DEFAULT_MIN_SEQUENCE_SUPPORT,
+  defaultSubtitle,
   MAX_CPU,
   MAX_MEM_GIB,
   maxClusterSizeError,
@@ -39,7 +40,7 @@ import {
   usePlDataTableSettingsV2,
 } from "@platforma-sdk/ui-vue";
 import { computed, ref, watch } from "vue";
-import { currentEmbeddingOptions, deriveSourceSeqRefs, useApp } from "../app";
+import { currentEmbeddingOptions, deriveSourceSeqRefs, refreshSubtitleLabel, useApp } from "../app";
 
 const app = useApp();
 
@@ -95,6 +96,7 @@ const datasetSelection = computed<DatasetSelection | undefined>({
     if (datasetKey(prev) !== datasetKey(next)) {
       app.model.data.embeddingRef = undefined;
       app.model.data.sequencesRef = [];
+      refreshSubtitleLabel(app.model);
     }
   },
 });
@@ -112,6 +114,7 @@ const isSequenceColumn = (column: PColumnIdAndSpec) =>
 function onEmbeddingRefChange(ref?: PlRef) {
   app.model.data.embeddingRef = ref;
   app.model.data.sequencesRef = ref ? deriveSourceSeqRefs(app.model, ref) : [];
+  refreshSubtitleLabel(app.model);
 }
 
 // Set instructions to track cluster axis
@@ -135,7 +138,7 @@ const clusterAxis = computed<AxisId>(() => {
 <template>
   <PlBlockPage
     v-model:subtitle="app.model.data.customBlockLabel"
-    :subtitle-placeholder="app.model.data.defaultBlockLabel"
+    :subtitle-placeholder="defaultSubtitle(app.model.data)"
     title="Embedding Clustering"
   >
     <template #append>
