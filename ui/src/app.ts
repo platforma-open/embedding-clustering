@@ -46,14 +46,17 @@ export function currentEmbeddingOptions(model: AppModel) {
 }
 
 // The subtitle names the chosen embedding column as the result pool labels it: "" when none is
-// chosen, undefined while the chosen embedding's option is not loaded yet.
+// chosen, undefined while the embedding options of the current dataset are loading; a chosen
+// embedding the loaded options no longer list is left out.
 function syncSubtitleLabel(model: AppModel) {
   const subtitleLabel = computed<string | undefined>(() => {
     const ref = model.data.embeddingRef;
     if (!ref) return "";
-    return currentEmbeddingOptions(model)?.find(
-      (o) => o.ref.blockId === ref.blockId && o.ref.name === ref.name,
-    )?.label;
+    const options = currentEmbeddingOptions(model);
+    if (options === undefined) return undefined;
+    return (
+      options.find((o) => o.ref.blockId === ref.blockId && o.ref.name === ref.name)?.label ?? ""
+    );
   });
 
   watch(

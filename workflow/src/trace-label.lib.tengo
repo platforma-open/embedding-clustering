@@ -1,0 +1,27 @@
+ll := import("@platforma-sdk/workflow-tengo:ll")
+text := import("text")
+
+// Block label (custom overrides default). The default is the block name with the native label
+// of the chosen embedding column, followed by the clustering settings.
+build := func(args, embSpec) {
+	traceLabel := args.customBlockLabel
+	if traceLabel == "" {
+		labelParts := []
+		embeddingLabel := is_undefined(embSpec.annotations) ? undefined : embSpec.annotations["pl7.app/label"]
+		if !is_undefined(embeddingLabel) && embeddingLabel != "" {
+			labelParts = append(labelParts, embeddingLabel)
+		}
+		if args.paramsLabel != "" {
+			labelParts = append(labelParts, args.paramsLabel)
+		}
+		traceLabel = "Embedding Clustering"
+		if len(labelParts) > 0 {
+			traceLabel = "Embedding Clustering (" + text.join(labelParts, ", ") + ")"
+		}
+	}
+	return traceLabel
+}
+
+export ll.toStrict({
+	build: build
+})

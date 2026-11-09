@@ -1,0 +1,51 @@
+test := import("@platforma-sdk/workflow-tengo:test")
+traceLabel := import(":trace-label")
+
+labelledSpec := {annotations: {"pl7.app/label": "ESM-2 CDR3"}}
+unlabelledSpec := {annotations: {}}
+emptyLabelSpec := {annotations: {"pl7.app/label": ""}}
+bareSpec := {}
+
+args := func(overrides) {
+	res := {
+		customBlockLabel: "",
+		paramsLabel: ""
+	}
+	for k, v in overrides {
+		res[k] = v
+	}
+	return res
+}
+
+Test_custom_label_is_kept_verbatim := func() {
+	test.isEqual("My run", traceLabel.build(args({
+		customBlockLabel: "My run",
+		paramsLabel: "min size 5"
+	}), labelledSpec), "custom label wins")
+}
+
+Test_default_lists_embedding_label_then_settings := func() {
+	test.isEqual("Embedding Clustering (ESM-2 CDR3, min size 5)", traceLabel.build(args({
+		paramsLabel: "min size 5"
+	}), labelledSpec), "embedding label, then settings")
+}
+
+Test_default_with_embedding_label_only := func() {
+	test.isEqual("Embedding Clustering (ESM-2 CDR3)", traceLabel.build(args({}), labelledSpec), "embedding label alone")
+}
+
+Test_missing_embedding_label_is_skipped := func() {
+	test.isEqual("Embedding Clustering (min size 5)", traceLabel.build(args({
+		paramsLabel: "min size 5"
+	}), unlabelledSpec), "no label annotation")
+	test.isEqual("Embedding Clustering (min size 5)", traceLabel.build(args({
+		paramsLabel: "min size 5"
+	}), emptyLabelSpec), "empty label annotation")
+	test.isEqual("Embedding Clustering (min size 5)", traceLabel.build(args({
+		paramsLabel: "min size 5"
+	}), bareSpec), "no annotations at all")
+}
+
+Test_nothing_to_add_gives_the_block_name := func() {
+	test.isEqual("Embedding Clustering", traceLabel.build(args({}), bareSpec), "bare block name")
+}

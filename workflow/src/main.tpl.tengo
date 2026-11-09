@@ -20,6 +20,7 @@ emptyCheckTpl := assets.importTemplate(":empty-check")
 anonymizationTpl := assets.importTemplate(":anonymization")
 embeddingClusteringTpl := assets.importTemplate(":embedding-clustering")
 clusterResultsTpl := assets.importTemplate(":cluster-results")
+traceLabelLib := import(":trace-label")
 
 setTableProps := func(spec, label, visibility, orderPriority, ...description) {
 	visibilityValue := ""
@@ -63,27 +64,6 @@ newTableBuilder := func(filterColumn) {
 		cpu: func(amount) { tb.cpu(amount) },
 		build: func() { return tb.build() }
 	}
-}
-
-// Block label (custom overrides default). The default is the block name with the native label
-// of the chosen embedding column, followed by the clustering settings.
-buildTraceLabel := func(args, embSpec) {
-	traceLabel := args.customBlockLabel
-	if traceLabel == "" {
-		labelParts := []
-		embeddingLabel := is_undefined(embSpec.annotations) ? undefined : embSpec.annotations["pl7.app/label"]
-		if !is_undefined(embeddingLabel) && embeddingLabel != "" {
-			labelParts = append(labelParts, embeddingLabel)
-		}
-		if args.paramsLabel != "" {
-			labelParts = append(labelParts, args.paramsLabel)
-		}
-		traceLabel = "Embedding Clustering"
-		if len(labelParts) > 0 {
-			traceLabel = "Embedding Clustering (" + text.join(labelParts, ", ") + ")"
-		}
-	}
-	return traceLabel
 }
 
 wf.prepare(func(args) {
@@ -595,7 +575,7 @@ wf.body(func(args) {
 	}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
 
 	// building outputs & exports
-	traceLabel := buildTraceLabel(args, embSpec)
+	traceLabel := traceLabelLib.build(args, embSpec)
 	// A subset run roots the trace in the filter (dataset -> the block that made the subset)
 	traceSpec := abundanceSpec
 	if !is_undefined(filterColumn) {
