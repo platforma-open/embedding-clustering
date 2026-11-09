@@ -20,6 +20,7 @@ emptyCheckTpl := assets.importTemplate(":empty-check")
 anonymizationTpl := assets.importTemplate(":anonymization")
 embeddingClusteringTpl := assets.importTemplate(":embedding-clustering")
 clusterResultsTpl := assets.importTemplate(":cluster-results")
+traceLabelLib := import(":trace-label")
 
 setTableProps := func(spec, label, visibility, orderPriority, ...description) {
 	visibilityValue := ""
@@ -574,10 +575,7 @@ wf.body(func(args) {
 	}, {splitDataAndSpec: true, cpu: defaultConvCpu, mem: defaultConvMem})
 
 	// building outputs & exports
-	traceLabel := args.customBlockLabel
-	if traceLabel == "" {
-		traceLabel = args.defaultBlockLabel
-	}
+	traceLabel := traceLabelLib.build(args, embSpec)
 	// A subset run roots the trace in the filter (dataset -> the block that made the subset)
 	traceSpec := abundanceSpec
 	if !is_undefined(filterColumn) {

@@ -5,6 +5,7 @@ import {
   cpuError,
   datasetKey,
   DEFAULT_MIN_SEQUENCE_SUPPORT,
+  defaultSubtitle,
   MAX_CPU,
   MAX_MEM_GIB,
   maxClusterSizeError,
@@ -135,7 +136,7 @@ const clusterAxis = computed<AxisId>(() => {
 <template>
   <PlBlockPage
     v-model:subtitle="app.model.data.customBlockLabel"
-    :subtitle-placeholder="app.model.data.defaultBlockLabel"
+    :subtitle-placeholder="defaultSubtitle(app.model.data)"
     title="Embedding Clustering"
   >
     <template #append>

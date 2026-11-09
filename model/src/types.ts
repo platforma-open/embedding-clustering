@@ -7,8 +7,10 @@ import type {
 } from "@platforma-sdk/model";
 
 export type BlockData = {
-  defaultBlockLabel: string;
   customBlockLabel: string;
+  // Label of the chosen embedding column as the result pool shows it, kept in sync by the UI;
+  // feeds the subtitle only, never the workflow.
+  subtitleLabel?: string;
   datasetRef?: PlRef;
   // Subset column picked with the dataset in PlDatasetSelector (e.g. a Repertoire Labeling label).
   filterRef?: PlRef;
@@ -94,14 +96,16 @@ export function selectionKey(ref: PlRef | undefined, filterRef: PlRef | undefine
   return `${datasetKey(ref)}/${datasetKey(filterRef)}`;
 }
 
-// Single source of truth for the auto-subtitle (also the workflow trace label, main.tpl). The UI's
-// syncDefaultBlockLabel (app.ts) only resolves the human-readable embedding-column label from the
-// result pool (which a pure function can't do) and calls this; it owns no format logic.
-export function getDefaultBlockLabel(data: {
-  embeddingLabel: string;
-  minClusterSize: number | undefined;
-  minSequenceSupport: number | undefined;
-}) {
+// Settings part of the block label, shared by the trace label (the workflow prepends the embedding
+// column's label) and the subtitle.
+export function labelFromParams(data: BlockData): string {
   // agr = Min Sequence Agreement (%). An empty field runs as the block does: mcs 2, agr 0 (check off).
-  return `${data.embeddingLabel || "Embedding"}, mcs:${data.minClusterSize ?? 2}, agr:${data.minSequenceSupport ?? 0}%`;
+  return `mcs:${data.minClusterSize ?? 2}, agr:${data.minSequenceSupport ?? 0}%`;
+}
+
+// Subtitle shown when the user has not set a custom block label. The stored embedding label names
+// the chosen embedding, so it is dropped while no embedding is chosen.
+export function defaultSubtitle(data: BlockData): string {
+  const embeddingLabel = data.embeddingRef ? data.subtitleLabel : "";
+  return [embeddingLabel, labelFromParams(data)].filter(Boolean).join(", ");
 }

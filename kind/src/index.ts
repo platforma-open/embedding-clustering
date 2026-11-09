@@ -19,9 +19,8 @@ import { name, version } from "../package.json" with { type: "json" };
  * would seed a block producing a different output shape than the one it was
  * exported from, until someone opened the settings panel and the derivation ran.
  *
- * `defaultBlockLabel` is absent: a `watchEffect` in `ui/src/app.ts` derives it from
- * the embedding column's option label, which only exists once the result pool has
- * resolved it.
+ * `subtitleLabel` is absent: it is the embedding column's option label, which only
+ * exists once the result pool has resolved it, and it feeds the subtitle alone.
  *
  * Every field is optional. A half-configured block is ordinary state the UI reaches
  * -- a dataset picked with no embedding chosen yet -- and the projection hands that

@@ -4,7 +4,7 @@ import { createPlDataTableStateV2 } from "@platforma-sdk/model";
 import { initBlockData } from "./dataModel";
 import { deriveTemplateParams } from "./templateParams";
 import type { BlockData } from "./types";
-import { DEFAULT_MIN_SEQUENCE_SUPPORT } from "./types";
+import { DEFAULT_MIN_SEQUENCE_SUPPORT, defaultSubtitle } from "./types";
 
 /**
  * The three steps a project template actually takes between two blocks: the source block's
@@ -24,8 +24,8 @@ const ANCHORED_IDS = [
 ] as BlockData["sequencesRef"];
 
 const CONFIGURED: BlockData = {
-  defaultBlockLabel: "ESM2 embedding, mcs:5",
   customBlockLabel: "run 7 clusters",
+  subtitleLabel: "ESM2 embedding",
   datasetRef: { __isRef: true, blockId: "b1", name: "pf/dataset" },
   filterRef: { __isRef: true, blockId: "b3", name: "pf/subset" },
   embeddingRef: { __isRef: true, blockId: "b2", name: "pf/embedding" },
@@ -94,15 +94,15 @@ describe("export -> apply", () => {
     expect(fresh.datasetRef).toBeUndefined();
   });
 
-  it("leaves the derived label to the panel, and agrees with it on the part it can compute", () => {
-    // The watchEffect in ui/src/app.ts builds the same string from the resolved cluster size
-    // and the embedding column's option label. `init` cannot reach the option label -- it comes
-    // from the result pool -- so the placeholder stands until the panel resolves it, but the
-    // cluster size must already match or the block would re-run the moment it was opened.
+  it("leaves the embedding label to the next pick, and keeps the settings part of the subtitle", () => {
+    // The embedding column's option label comes from the source project's result pool, so it
+    // does not travel; the settings part is computed from data and must already match.
     const seeded = roundTrip(CONFIGURED);
 
-    expect(seeded.defaultBlockLabel).not.toBe(CONFIGURED.defaultBlockLabel);
-    expect(seeded.defaultBlockLabel).toContain(`mcs:${CONFIGURED.minClusterSize}`);
+    expect(seeded.subtitleLabel).toBe("");
+    expect(defaultSubtitle(seeded)).toBe(
+      `mcs:${CONFIGURED.minClusterSize}, agr:${CONFIGURED.minSequenceSupport}%`,
+    );
   });
 
   it("resets the view state rather than carrying it", () => {
