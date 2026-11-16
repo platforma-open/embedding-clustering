@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.3
+
+### Patch Changes
+
+- Updated dependencies [af1c119]
+  - @platforma-open/milaboratories.embedding-clustering.kind@1.2.1
+
 ## 2.4.2
 
 ### Patch Changes

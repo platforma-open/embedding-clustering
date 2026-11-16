@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.3
+
+### Patch Changes
+
+- @platforma-open/milaboratories.embedding-clustering.model@2.4.3
+
 ## 2.4.2
 
 ### Patch Changes
