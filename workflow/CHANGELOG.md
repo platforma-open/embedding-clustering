@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.4
+
+### Patch Changes
+
+- Updated dependencies [eea38e4]
+  - @platforma-open/milaboratories.embedding-clustering.software@2.2.0
+
 ## 2.4.3
 
 ## 2.4.2

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.0
+
+### Minor Changes
+
+- eea38e4: Update software
+
 ## 2.1.0
 
 ### Minor Changes

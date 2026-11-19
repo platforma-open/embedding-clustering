@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.4
+
+### Patch Changes
+
+- eea38e4: Update software
+
 ## 2.4.3
 
 ### Patch Changes
